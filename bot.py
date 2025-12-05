@@ -1,5 +1,7 @@
-import os
+import asyncio
+import logging
 import math
+import os
 import random
 
 from telegram import (
@@ -10,606 +12,484 @@ from telegram import (
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    MessageHandler,
     ConversationHandler,
+    MessageHandler,
     ContextTypes,
     filters,
 )
+
+# ===== Logging =====
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 # ===== Conversation states =====
 (
     BRAND,
     MARKET,
-    FORMAT,
+    LANGUAGE,
+    MEDIA_TYPE,
+    LENGTH,
     STYLE,
     GOAL,
-    ACTOR,
-    LENGTH,
-    LANGUAGE,
     IDEA_MODE,
-    IDEA_TEXT,
-    VARIATIONS,
-) = range(11)
+    FREE_IDEA,
+    GENERATE,
+) = range(10)
 
 
-# ===== Helpers =====
-
-def infer_native_language(market: str) -> tuple[str, str]:
-    """Detect base language from market name."""
-    m = (market or "").strip().lower()
-
-    if "argentina" in m:
-        return "ES", "Spanish for Argentina"
-    if "peru" in m:
-        return "ES", "Spanish for Peru"
-    if "israel" in m or "ישראל" in m:
-        return "HE", "Hebrew"
-    if "south africa" in m:
-        return "EN", "English for South Africa"
-    if "malawi" in m:
-        return "EN", "English for Malawi"
-    if "zambia" in m:
-        return "EN", "English for Zambia"
-
-    return "EN", "English"
+# ===== Helper: language mapping =====
+LANGUAGE_OPTIONS = {
+    "English": "EN",
+    "Spanish - Argentina": "ES_AR",
+    "Spanish - Peru": "ES_PE",
+}
 
 
-def compute_segments(length: int) -> list[int]:
-    """
-    מחלק אורך וידאו (שניות) למקטעים של עד 8 שניות.
-    מחזיר רשימה של אורכי מקטעים.
-    לדוגמה: 16 -> [8, 8], 20 -> [8, 8, 4]
-    """
-    length = max(4, min(24, length))  # נגביל ל־4–24 שניות בשביל ההיגיון
-    segments: list[int] = []
-    remaining = length
-    while remaining > 0:
-        seg = min(8, remaining)
-        segments.append(seg)
-        remaining -= seg
-    return segments
-
-
-def generate_concept_auto(settings: dict, variation_index: int) -> dict:
-    """מייצר קונספט רנדומלי לגמרי, לפי ההגדרות הכלליות."""
-    style = settings.get("style", "")
-    brand = settings.get("brand", "")
-    market = settings.get("market", "")
-
-    if "UGC selfie" in style:
-        locations = [
-            "במחצית על הספה כשהחברים צועקים על המסך",
-            "במיטה בבוקר לפני שיוצא לעבודה",
-            "באוטובוס בדרך למשחק",
-            "במטבח בזמן שהוא מכין קפה",
-        ]
-        angles = [
-            "סלפי קרוב לפנים",
-            "סלפי קצת מרוחק עם רקע של הבית",
-            "סלפי עם רקע של הרחוב בחוץ",
-        ]
-    elif "Green screen" in style:
-        locations = [
-            "מול מסך ירוק כשמאחוריו ויז׳ואלים של ליגות ומשחקים",
-            "מול מסך ירוק עם גרפים של סטטיסטיקות",
-        ]
-        angles = [
-            "מצלמה בגובה העיניים, שוט אמצעי",
-            "שוט כתפיים, המצלמה מעט מעל העיניים",
-        ]
-    else:
-        locations = [
-            "בפאב מלא אוהדים",
-            "במשרד בזמן הפסקת צהריים",
-            "בסלון מול טלוויזיה גדולה",
-        ]
-        angles = [
-            "מצלמה בגובה העיניים כאילו חבר מצלם",
-            "מצלמה סטטית על חצובה",
-        ]
-
-    hooks = [
-        f"\"מאז שהתחלתי להשתמש ב{brand}, הרבה יותר קל לי לעקוב אחרי כל המשחקים.\"",
-        f"\"אתמול באמצע המשחק גיליתי את {brand} וזה שינה לי את כל הדרך שאני עוקב אחרי כדורגל.\"",
-        f"\"כולם בקבוצה שלי כבר ב{brand} ורק אני נשארתי מאחור – עד עכשיו.\"",
-    ]
-
-    ctas = [
-        f"\"תורידו את {brand} ותנסו בעצמכם.\"",
-        f"\"תורידו עכשיו את {brand} ותהיו מעודכנים לפני כולם.\"",
-        f"\"פשוט תורידו את {brand} ותראו לבד כמה זה נוח.\"",
-    ]
-
-    concept = {
-        "core_idea": f"אוהד כדורגל ב{market} שמראה איך {brand} עושה לו סדר ביום יום",
-        "location": random.choice(locations),
-        "camera_angle": random.choice(angles),
-        "hook_line": random.choice(hooks),
-        "cta_line": random.choice(ctas),
-        "variation_index": variation_index,
-        "mode": "auto",
-    }
-    return concept
-
-
-def generate_concept_from_user(settings: dict, idea_text: str, variation_index: int) -> dict:
-    """קונספט שמבוסס על רעיון כללי שהמשתמש כתב, עם קצת רנדומליות מסביב."""
-    base = generate_concept_auto(settings, variation_index)
-    base["core_idea"] = idea_text.strip()
-    base["mode"] = "manual"
-    return base
-
-
-def make_veo_segment_script(
-    brand: str,
-    market: str,
-    lang_code: str,
-    concept: dict,
-    segment_index: int,
-    segment_count: int,
-) -> str:
-    """
-    בונה טקסט דיאלוג רק למקטע מסוים (Hook / גוף / CTA).
-    שומר על שוני בין וריאציות כי החלקים רנדומליים.
-    """
-    hook = concept["hook_line"]
-    cta = concept["cta_line"]
-    location = concept["location"]
-
-    if lang_code.upper() == "ES":
-        # גרסה מאוד בסיסית בספרדית; אפשר לחדד אחר כך
-        if segment_index == 0:
-            return (
-                f"{hook} Estoy en {location} y abro la app para ver todos los marcadores "
-                f"en vivo en segundos."
-            )
-        elif segment_index < segment_count - 1:
-            return (
-                "Miro próximos partidos, estadísticas y lo que juega mi equipo "
-                "sin perder tiempo cambiando de apps."
-            )
-        else:
-            return (
-                f"Todo desde un solo lugar y sin complicaciones. {cta}"
-            )
-
-    # ברירת מחדל – עברית / אנגלית פשוטה
-    if segment_index == 0:
-        return (
-            f"{hook} אני ב{location} ופשוט פותח את האפליקציה ורואה את כל התוצאות בשנייה."
-        )
-    elif segment_index < segment_count - 1:
-        return (
-            "אני מדפדף בין משחקים, לייב סקורז ולוח המשחקים – הכל במקום אחד."
-        )
-    else:
-        return (
-            f"הכל מסודר וברור, בלי לבזבז זמן. {cta}"
-        )
-
-
-def build_whisk_prompt(data: dict, concept: dict) -> str:
-    brand = data["brand"]
-    market = data["market"]
-    style = data["style"]
-    goal = data["goal"]
-    actor = data.get("actor", f"young football fan from {market}")
-    variant = data.get("variant_index")
-
-    variant_label = f"Variation {variant}" if variant else "Single version"
-
-    prompt = f"""
-Static ad image for Whisk.
-Brand: "{brand}"
-Market: "{market}"
-{variant_label}
-Creative style: {style}
-Objective: {goal}
-
-Concept:
-- Core idea: {concept['core_idea']}
-- Location: {concept['location']}
-- Camera angle: {concept['camera_angle']}
-
-Scene:
-- Show {actor} in a setting that feels natural for {market}, matching the concept location.
-- Vertical or 4:5 mobile friendly composition.
-- The person may hold a phone, but if the phone appears the screen must not face the camera.
-- Background should be clean but with enough context (home, street, office, taxi etc).
-
-Branding:
-- Use {brand} colors strongly in UI elements, accents or clothing.
-- Include clear brand name and a big readable CTA such as "Free Download" or "Sign up now".
-
-Restrictions:
-- Do not use real football teams or real player faces.
-- Instructions are for the generator only and must not appear as visible text.
-""".strip()
-
-    return prompt
-
-
-def build_veo_prompts(data: dict, concept: dict) -> list[str]:
-    """
-    מחזיר רשימת פרומפטים – אחד לכל מקטע של עד 8 שניות.
-    """
-    brand = data["brand"]
-    market = data["market"]
-    style = data["style"]
-    goal = data["goal"]
-    length = int(data.get("length", 8))
-    lang_code = data["language"]
-    actor = data.get("actor", f"young football fan from {market}")
-    variant = data.get("variant_index")
-
-    segments = compute_segments(length)
-    segment_count = len(segments)
-
-    prompts: list[str] = []
-
-    for idx, seg_len in enumerate(segments):
-        script_text = make_veo_segment_script(
-            brand=brand,
-            market=market,
-            lang_code=lang_code,
-            concept=concept,
-            segment_index=idx,
-            segment_count=segment_count,
-        )
-
-        variant_label = f"Variation {variant}" if variant else "Single version"
-
-        prompt = f"""
-Google VEO video generation prompt.
-Brand: "{brand}"
-Market: "{market}"
-{variant_label}
-Segment: {idx + 1}/{segment_count}
-Target duration: {seg_len} seconds
-Creative style: {style}
-Objective: {goal}
-
-Concept:
-- Core idea: {concept['core_idea']}
-- Location: {concept['location']}
-- Camera angle: {concept['camera_angle']}
-- Hook: {concept['hook_line']}
-- CTA: {concept['cta_line']}
-
-Reference image usage:
-- Use the provided reference image as frame 1 for this segment.
-- Frame 1 must match the reference image exactly:
-  same actor style, clothing, lighting, background and camera angle.
-- Do NOT redesign the actor. Continue naturally from the still into motion.
-
-Scene and camera:
-- Vertical 9:16 UGC style with slight handheld motion.
-- Show {actor} as the main subject.
-- Environment should match {market} and the concept location.
-- The actor holds a phone but the screen is never shown to the camera.
-
-Voice:
-- Young African male if relevant to {market}.
-- Warm, conversational tone, medium energy.
-- Dialog must comfortably fit inside {seg_len} seconds.
-
-Dialog for THIS segment only (spoken, no stage directions):
-{script_text}
-
-Do NOT include technical words like "voiceover" or "scene description" inside the dialog.
-""".strip()
-
-        prompts.append(prompt)
-
-    return prompts
-
-
-# ===== Conversation handlers =====
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Start command =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "היי 👋\nבוא נייצר קריאייטיב.\n\n"
-        "קודם כל, מה שם הברנד? (לדוגמה: PAS, Betsson, AdmiralBet)"
+        "היי, אני creative_bot. בוא נבנה פרומפטים.\n\n"
+        "קודם כל, מה שם הברנד? (לדוגמה: betsson, Premier Africa Sports)",
+        reply_markup=ReplyKeyboardRemove(),
     )
     return BRAND
 
 
-async def brand_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def brand_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["brand"] = update.message.text.strip()
     await update.message.reply_text(
-        "לאיזה מדינה או שוק? (לדוגמה: South Africa, Malawi, Argentina)"
+        "מעולה. באיזה מדינה או שוק אתה עובד? (לדוגמה: Argentina, South Africa)",
     )
     return MARKET
 
 
-async def market_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def market_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["market"] = update.message.text.strip()
 
-    reply_keyboard = [["VEO - Video", "Whisk - Image"]]
+    keyboard = [["English"], ["Spanish - Argentina"], ["Spanish - Peru"]]
     await update.message.reply_text(
-        "מה סוג הקריאייטיב?",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
+        "בחר שפת מותג עבור התסריט:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
-    return FORMAT
+    return LANGUAGE
 
 
-async def format_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if "VEO" in text:
-        context.user_data["format"] = "veo"
-    else:
-        context.user_data["format"] = "whisk"
+async def language_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = update.message.text.strip()
+    lang_code = LANGUAGE_OPTIONS.get(choice, "EN")
+    context.user_data["language"] = lang_code
 
-    reply_keyboard = [
-        ["UGC selfie", "UGC filmed by friend"],
-        ["Motion graphic", "Green screen"],
-        ["Free text / custom"],
-    ]
+    keyboard = [["VEO video"], ["Image"]]
     await update.message.reply_text(
-        "מה הסגנון?",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
+        "מה סוג הקריאייטיב שאתה רוצה לייצר?",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+    )
+    return MEDIA_TYPE
+
+
+async def media_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    media = update.message.text.strip()
+    context.user_data["media_type"] = "video" if "video" in media.lower() else "image"
+
+    if context.user_data["media_type"] == "video":
+        await update.message.reply_text(
+            "מה האורך הכולל של הסרטון בשניות? (לדוגמה: 8, 12, 16)",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return LENGTH
+    else:
+        # For image we skip length
+        context.user_data["length"] = None
+        await update.message.reply_text(
+            "איזה סגנון קריאייטיב אתה רוצה? (לדוגמה: UGC selfie, motion graphic, clean promo)",
+        )
+        return STYLE
+
+
+async def length_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        total_length = int(text)
+        if total_length <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("תכתוב מספר חיובי בשניות, לדוגמה 8 או 16.")
+        return LENGTH
+
+    context.user_data["length"] = total_length
+
+    await update.message.reply_text(
+        "איזה סגנון קריאייטיב אתה רוצה? (לדוגמה: UGC selfie, green screen, stadium POV)",
     )
     return STYLE
 
 
-async def style_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def style_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["style"] = update.message.text.strip()
 
     await update.message.reply_text(
-        "מה המטרה העיקרית של הקריאייטיב? (למשל: להורדות, רישום, הפעלת משתמשים וכו׳)",
-        reply_markup=ReplyKeyboardRemove(),
+        "מה המטרה המרכזית? (לדוגמה: להגדיל הורדות, להסביר איך האפליקציה עובדת, להציג פרומו חדש)",
     )
     return GOAL
 
 
-async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["goal"] = update.message.text.strip()
 
-    reply_keyboard = [
-        ["Male 18-25 energetic", "Male 25-35 calm"],
-        ["Female 18-25 energetic", "Female 25-35 calm"],
-        ["Other - I will describe"],
-    ]
+    keyboard = [["רעיונות רנדומליים"], ["יש לי רעיון כללי"]]
     await update.message.reply_text(
-        "תבחר סוג שחקן (או בחר Other ותכתוב לי אחר כך מה אתה רוצה):",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
-    )
-    return ACTOR
-
-
-async def actor_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-
-    # במידה וזה המשך של "Other"
-    if context.user_data.get("waiting_custom_actor"):
-        context.user_data["waiting_custom_actor"] = False
-        context.user_data["actor"] = text
-    elif text.startswith("Other"):
-        context.user_data["waiting_custom_actor"] = True
-        await update.message.reply_text(
-            "תכתוב במדויק את סוג השחקן (גיל, מגדר, וייב, לדוגמה: "
-            '"young South African male, early 20s, funny and energetic").',
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return ACTOR
-    else:
-        context.user_data["actor"] = text
-
-    # ממשיכים – אם זה וידאו, שואלים אורך; אם תמונה – ישר לשפה
-    if context.user_data.get("format") == "veo":
-        await update.message.reply_text(
-            "מה אורך הוידאו בשניות? (לדוגמה: 8, 16, 24)",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return LENGTH
-
-    market = context.user_data.get("market", "")
-    native_code, native_label = infer_native_language(market)
-    reply_keyboard = [["Native language", "English"]]
-    await update.message.reply_text(
-        f"הטקסט של התמונה יהיה ב:\n"
-        f"- שפת המקור של {market} ({native_label})\n"
-        f"- או English?",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
-    )
-    return LANGUAGE
-
-
-async def length_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    try:
-        length = int(text)
-    except ValueError:
-        await update.message.reply_text("תכתוב מספר שניות תקין, לדוגמה 8 או 16.")
-        return LENGTH
-
-    context.user_data["length"] = length
-
-    market = context.user_data.get("market", "")
-    native_code, native_label = infer_native_language(market)
-
-    reply_keyboard = [["Native language", "English"]]
-    await update.message.reply_text(
-        f"הטקסט של הסרטון יהיה ב:\n"
-        f"- שפת המקור של {market} ({native_label})\n"
-        f"- או English?",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
-    )
-    return LANGUAGE
-
-
-async def language_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-
-    market = context.user_data.get("market", "")
-    native_code, native_label = infer_native_language(market)
-
-    if "native" in text:
-        lang_code = native_code
-    elif "english" in text:
-        lang_code = "EN"
-    else:
-        await update.message.reply_text(
-            "נא לבחור באחת מהאפשרויות: Native language או English."
-        )
-        return LANGUAGE
-
-    context.user_data["language"] = lang_code
-
-    reply_keyboard = [
-        ["🎲 תביא לי רעיונות בשבילי", "✏️ אני אכתוב רעיון כללי"],
-    ]
-    await update.message.reply_text(
-        "איך אתה רוצה לבחור את רעיון הסרטון/תמונה?\n"
-        "1. שאביא לך רעיונות שונים אוטומטית.\n"
-        "2. שתכתוב רעיון כללי ואני אייצר כמה וריאציות סביבו.",
-        reply_markup=ReplyKeyboardMarkup(
-            reply_keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
+        "רוצה שאני אביא 3 רעיונות שונים לגמרי, או שיש לך רעיון כללי לסרטון?",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return IDEA_MODE
 
 
-async def idea_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+async def idea_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    choice = update.message.text.strip()
 
-    if "רעיונות" in text or "🎲" in text:
-        context.user_data["idea_mode"] = "auto"
-        # אין צורך בטקסט חופשי – עוברים ישר לכמות וריאציות
+    if "כללי" in choice:
+        context.user_data["idea_mode"] = "free"
         await update.message.reply_text(
-            "מעולה, אביא רעיונות אוטומטית.\n"
-            "כמה וריאציות אתה רוצה? (1 עד 3)",
+            "ספר לי בקצרה את הרעיון הכללי לסרטון או לתמונה.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        return VARIATIONS
+        return FREE_IDEA
 
-    context.user_data["idea_mode"] = "manual"
-    await update.message.reply_text(
-        "תכתוב לי רעיון כללי לסרטון / לתמונה (POV, סיטואציה, מה הקטע המרכזי):",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    return IDEA_TEXT
+    context.user_data["idea_mode"] = "random"
+    context.user_data["base_idea"] = None
+
+    return await generate_handler(update, context)
 
 
-async def idea_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["idea_text"] = update.message.text.strip()
-    await update.message.reply_text(
-        "מעולה. כמה וריאציות אתה רוצה שאייצר? (1 עד 3)"
-    )
-    return VARIATIONS
+async def free_idea_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["base_idea"] = update.message.text.strip()
+    return await generate_handler(update, context)
 
 
-async def variations_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    try:
-        num = int(text)
-    except ValueError:
-        await update.message.reply_text("תכתוב מספר בין 1 ל-3.")
-        return VARIATIONS
+# ===== Script text by language =====
+def build_script_text(brand: str, market: str, lang_code: str, idea: str) -> str:
+    code = lang_code.upper()
 
-    if num < 1:
-        num = 1
-    if num > 3:
-        num = 3
+    if code in ("ES_AR", "ES-AR", "ES"):
+        return f"""
+[HOOK]
+"Desde que uso {brand}, seguir el fútbol en {market} es muchísimo más fácil."
 
-    context.user_data["variations"] = num
-    fmt = context.user_data["format"]
-    idea_mode = context.user_data.get("idea_mode", "auto")
-    idea_text = context.user_data.get("idea_text", "")
+[BODY]
+"Abro la app, veo marcadores en vivo, próximos partidos y mis jugadas en segundos.
+Todo en un solo lugar, rápido y sin complicaciones."
 
-    base_settings = dict(context.user_data)
+[CTA]
+"Descarga {brand} ahora mismo y pruébala gratis."
+Idea principal del video: {idea}
+        """.strip()
 
-    # ניצור וריאציות
-    if fmt == "veo":
-        for i in range(1, num + 1):
-            variant_data = dict(base_settings)
-            variant_data["variant_index"] = i
+    if code in ("ES_PE", "ES-PE"):
+        return f"""
+[HOOK]
+"Desde que tengo {brand}, seguir el fútbol en {market} es mucho más simple."
 
-            if idea_mode == "auto":
-                concept = generate_concept_auto(variant_data, i)
-            else:
-                concept = generate_concept_from_user(variant_data, idea_text, i)
+[BODY]
+"Reviso resultados en vivo, próximos partidos y mis apuestas en cuestión de segundos.
+Todo en un solo lugar, rápido y sin complicaciones."
 
-            veo_prompts = build_veo_prompts(variant_data, concept)
+[CTA]
+"Descarga {brand} hoy mismo y pruébala gratis."
+Idea principal del video: {idea}
+        """.strip()
 
-            for idx, vp in enumerate(veo_prompts, start=1):
-                await update.message.reply_text(
-                    f"🎥 וריאציה {i} – פרומפט וידאו {idx}/{len(veo_prompts)}:\n\n{vp}"
+    if code == "HE":
+        return f"""
+[HOOK]
+"מאז שהתחלתי להשתמש ב {brand}, יותר קל לי לעקוב אחרי הכדורגל ב {market}."
+
+[BODY]
+"אני פותח את האפליקציה, רואה תוצאות חיות, משחקים קרובים ומה שמעניין אותי בכמה שניות.
+הכל במקום אחד, מהר ובלי כאב ראש."
+
+[CTA]
+"תוריד את {brand} עכשיו ותנסה בחינם."
+רעיון הסרטון: {idea}
+        """.strip()
+
+    # Default English
+    return f"""
+[HOOK]
+"Since I started using {brand}, following football in {market} became much easier."
+
+[BODY]
+"I open the app, check live scores, fixtures and my picks in seconds.
+Everything is in one place, fast and simple."
+
+[CTA]
+"Download {brand} today and try it for free."
+Main idea of the video: {idea}
+    """.strip()
+
+
+# ===== Idea generation =====
+def generate_ideas(data: dict, base_idea: str | None, num: int = 3) -> list[str]:
+    brand = data["brand"]
+    market = data["market"]
+    media_type = data["media_type"]
+
+    ideas = []
+
+    if base_idea:
+        # Variations around user idea
+        templates = [
+            "POV של משתמש שכבר מכור ל {brand}, מספר בקצרה על {base}",
+            "קיצר, חבר מסביר לחבר על {brand} תוך כדי משחק על המסך - {base}",
+            "סצנה יומיומית ב {market} שמובילה ברוגע להורדת {brand} - {base}",
+        ]
+        for i in range(num):
+            t = random.choice(templates)
+            ideas.append(
+                t.format(
+                    brand=brand,
+                    market=market,
+                    base=base_idea,
                 )
-
-        await update.message.reply_text("ליצירת קריאייטיב חדש – /start")
-        return ConversationHandler.END
-
-    # פורמט תמונות – Whisk
-    for i in range(1, num + 1):
-        variant_data = dict(base_settings)
-        variant_data["variant_index"] = i
-
-        if idea_mode == "auto":
-            concept = generate_concept_auto(variant_data, i)
+            )
+    else:
+        # Fully random concepts
+        if media_type == "video":
+            pool = [
+                "אוהד בודק תוצאות בזמן העבודה וקולט שהוא תמיד מקבל התראות לפני כולם עם האפליקציה",
+                "חבורה של חברים בחדר צפייה, אחד מהם מנהל את כל ההימורים שלו מהטלפון בקלות",
+                "פתיחת יום של אוהד: קפה, טלפון, לוח משחקים באפליקציה ומעקב אחרי הטיקר של המשחקים",
+                "נהג מונית בפקק שומר על קשר עם המשחקים דרך האפליקציה בלי לפספס לקוחות",
+                "סטודנט לומד בספריה ומציץ מדי פעם באפליקציה כדי לעקוב אחרי הטופס שלו",
+            ]
         else:
-            concept = generate_concept_from_user(variant_data, idea_text, i)
+            pool = [
+                "תמונה של מסך טלפון עם לוח משחקים מלא ואוהד מחייך ברקע",
+                "קלוז אפ על יד שמחזיקה טלפון עם תוצאות חיות ואפקט ניאון סביב המספרים",
+                "קולאז של אייקוני ליגות גדולות עם לוגו של האפליקציה במרכז",
+                "רקע של אצטדיון חשוך עם מסך טלפון שמאיר במרכז ומציג את הפרומו",
+            ]
 
-        whisk_prompt = build_whisk_prompt(variant_data, concept)
-        await update.message.reply_text(
-            f"🖼️ וריאציה {i} – פרומפט Whisk:\n\n{whisk_prompt}"
+        random.shuffle(pool)
+        ideas = pool[:num]
+
+    return ideas
+
+
+# ===== Prompt builders =====
+def build_veo_prompt(data: dict, idea: str, variation_index: int) -> str:
+    brand = data["brand"]
+    market = data["market"]
+    style = data["style"]
+    goal = data["goal"]
+    total_length = data["length"]
+    lang_code = data["language"]
+
+    script_text = build_script_text(brand, market, lang_code, idea)
+
+    # Split into segments of max 8 seconds
+    segment_length = 8
+    num_segments = max(1, math.ceil(total_length / segment_length))
+
+    header = f"""
+Google VEO video generation prompt.
+Brand: "{brand}"
+Market: "{market}"
+Variation {variation_index}
+Total length: {total_length} seconds
+Creative style: {style}
+Objective: {goal}
+
+Concept:
+{idea}
+
+General rules:
+- Vertical 9:16 UGC friendly video.
+- Natural handheld feeling.
+- Environment, outfits and phone usage must fit {market}.
+- Never show the phone screen directly to camera.
+- Dialog must be written in the correct language for this market.
+- Dialog must fit inside the timing of each segment.
+
+Example script in target language:
+{script_text}
+    """.strip()
+
+    segments_text = []
+
+    for seg in range(num_segments):
+        start_t = seg * segment_length
+        end_t = min(total_length, (seg + 1) * segment_length)
+        seg_len = end_t - start_t
+
+        segments_text.append(
+            f"""
+Segment {seg + 1} - from {start_t} to {end_t} seconds (about {seg_len} seconds):
+
+1. Describe camera framing, movement and environment in detail.
+2. Describe actor actions and expressions.
+3. Write the exact spoken dialog for this segment in the target language.
+4. Keep the dialog short and realistic so it comfortably fits inside {seg_len} seconds.
+5. Do not mention "voiceover" or "scene description" inside the dialog.
+            """.strip()
         )
 
-    await update.message.reply_text("ליצירת קריאייטיב חדש – /start")
-    return ConversationHandler.END
+    full = header + "\n\n" + "\n\n".join(segments_text)
+    return full
 
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "ביטלתי את תהליך יצירת הקריאייטיב. אפשר להתחיל מחדש עם /start.",
-        reply_markup=ReplyKeyboardRemove(),
+def build_image_prompt(data: dict, idea: str, variation_index: int) -> str:
+    brand = data["brand"]
+    market = data["market"]
+    style = data["style"]
+    goal = data["goal"]
+    lang_code = data["language"]
+
+    script_text = build_script_text(brand, market, lang_code, idea)
+
+    prompt = f"""
+Image generation prompt.
+Brand: "{brand}"
+Market: "{market}"
+Variation {variation_index}
+Creative style: {style}
+Objective: {goal}
+
+Concept:
+{idea}
+
+Visual rules:
+- Design must look native for {market}.
+- Use colors and typography that fit a modern sports or betting app.
+- Do not use real club logos or real player faces.
+- Make the brand name and main CTA big and readable.
+
+Text language:
+- All on-image text must be in the correct language for this market.
+- Use short and punchy copy that matches this example tone:
+
+Example copy in target language:
+{script_text}
+
+Now describe:
+1. The full scene: background, foreground, props, lighting.
+2. The main subject or focal point.
+3. The exact on-image text: headline and CTA in the target language.
+    """.strip()
+
+    return prompt
+
+
+# ===== Generate handler =====
+async def generate_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    data = context.user_data
+    brand = data["brand"]
+    market = data["market"]
+    media_type = data["media_type"]
+    lang_code = data["language"]
+
+    base_idea = data.get("base_idea")
+    ideas = generate_ideas(data, base_idea, num=3)
+
+    prompts = []
+    for idx, idea in enumerate(ideas, start=1):
+        if media_type == "video":
+            p = build_veo_prompt(data, idea, idx)
+        else:
+            p = build_image_prompt(data, idea, idx)
+        prompts.append(p)
+
+    header = (
+        f"סיימתי לבנות פרומפטים עבור הברנד {brand} בשוק {market} "
+        f"ובשפה {lang_code}. קיבלת 3 וריאציות שונות.\n\n"
+        "מומלץ להעתיק כל וריאציה בנפרד לכלי היצירה."
     )
+
+    await update.message.reply_text(header)
+
+    for idx, p in enumerate(prompts, start=1):
+        # כדי לא להיתקע על הודעות ארוכות מדי, אפשר לפצל אם תרצה.
+        await update.message.reply_text(f"וריאציה {idx}:\n\n{p}")
+
+    await update.message.reply_text(
+        "אם תרצה להשתמש באותן הגדרות ולקבל רעיונות חדשים לגמרי, שלח /again.\n"
+        "כדי להתחיל הגדרות חדשות, שלח /start.",
+    )
+
     return ConversationHandler.END
 
 
-def main():
+# ===== /again - reuse last settings =====
+async def again(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.get("brand"):
+        await update.message.reply_text("אין הגדרות קודמות בזיכרון. שלח /start כדי להתחיל מחדש.")
+        return
+
+    # כשעושים /again, נביא רעיונות רנדומליים חדשים עם אותן הגדרות
+    data = context.user_data.copy()
+    data["idea_mode"] = "random"
+    data["base_idea"] = None
+
+    brand = data["brand"]
+    market = data["market"]
+
+    await update.message.reply_text(
+        f"מייצר עכשיו רעיונות ופרומפטים חדשים עבור {brand} ב {market} על בסיס אותן הגדרות...",
+    )
+
+    ideas = generate_ideas(data, None, num=3)
+
+    prompts = []
+    for idx, idea in enumerate(ideas, start=1):
+        if data["media_type"] == "video":
+            p = build_veo_prompt(data, idea, idx)
+        else:
+            p = build_image_prompt(data, idea, idx)
+        prompts.append(p)
+
+    for idx, p in enumerate(prompts, start=1):
+        await update.message.reply_text(f"וריאציה {idx}:\n\n{p}")
+
+
+# ===== /cancel =====
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("בוטל. אם תרצה להתחיל מחדש שלח /start.")
+    return ConversationHandler.END
+
+
+# ===== Main =====
+async def main() -> None:
     token = os.environ.get("TOKEN")
     if not token:
-        raise RuntimeError(
-            "Environment variable TOKEN is not set. "
-            "אתה צריך להגדיר TOKEN עם הטוקן של הבוט ב־Render / מקומית."
-        )
+        raise RuntimeError("You must set the TOKEN environment variable with your bot token")
 
-    app = ApplicationBuilder().token(token).build()
+    application = ApplicationBuilder().token(token).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, brand_handler)],
             MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, market_handler)],
-            FORMAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, format_handler)],
+            LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, language_handler)],
+            MEDIA_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, media_type_handler)],
+            LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, length_handler)],
             STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, style_handler)],
             GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_handler)],
-            ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, actor_handler)],
-            LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, length_handler)],
-            LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, language_handler)],
             IDEA_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, idea_mode_handler)],
-            IDEA_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, idea_text_handler)],
-            VARIATIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, variations_handler)],
+            FREE_IDEA: [MessageHandler(filters.TEXT & ~filters.COMMAND, free_idea_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    app.add_handler(conv_handler)
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("again", again))
 
-    app.run_polling()
+    logger.info("Bot is starting with polling...")
+    await application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
