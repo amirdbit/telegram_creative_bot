@@ -1,495 +1,302 @@
-import asyncio
+import os
 import logging
 import math
-import os
-import random
+from typing import Dict, Any
 
 from telegram import (
     Update,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
-    ConversationHandler,
     MessageHandler,
+    ConversationHandler,
     ContextTypes,
     filters,
 )
 
-# ===== Logging =====
+# ----------------- CONFIG & LOGGING -----------------
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# ===== Conversation states =====
-(
-    BRAND,
-    MARKET,
-    LANGUAGE,
-    MEDIA_TYPE,
-    LENGTH,
-    STYLE,
-    GOAL,
-    IDEA_MODE,
-    FREE_IDEA,
-    GENERATE,
-) = range(10)
+# אל תכתוב את הטוקן בקוד. ברנדר שמים אותו כ TOKEN ב Environment.
+TOKEN = os.getenv("TOKEN")
+
+# ----------------- CONVERSATION STATES -----------------
+
+ASK_BRAND, ASK_MARKET, ASK_ASSET_TYPE, ASK_DURATION, ASK_LANGUAGE, ASK_IDEA_MODE, ASK_CUSTOM_IDEA = range(
+    7
+)
 
 
-# ===== Helper: language mapping =====
-LANGUAGE_OPTIONS = {
-    "English": "EN",
-    "Spanish - Argentina": "ES_AR",
-    "Spanish - Peru": "ES_PE",
-}
+# ----------------- HELPERS -----------------
+
+def split_to_segments(duration_sec: int) -> int:
+    """VEO עובד עד 8 שניות לפרומפט. מחזיר כמה פרומפטים צריך."""
+    return max(1, math.ceil(duration_sec / 8))
 
 
-# ===== Start command =====
+def generate_random_ideas(asset_type: str, market: str) -> Dict[str, str]:
+    """
+    מחזיר שלושה רעיונות בסיסיים שונים לפי סוג הנכס והמדינה.
+    זה רק בסיס, מחר נוכל להעמיק.
+    """
+    asset_type = asset_type.lower()
+
+    if asset_type == "video":
+        return {
+            "Idea 1": f"Match day reaction in {market} - fan checking the app during a key moment.",
+            "Idea 2": f"Halftime routine in {market} - how the app keeps the fan updated and engaged.",
+            "Idea 3": f"On the go in {market} - user checking live scores while commuting or at work.",
+        }
+    else:
+        # image
+        return {
+            "Idea 1": f"Close up of the phone in {market} with key features highlighted around it.",
+            "Idea 2": f"Fan celebrating with subtle app UI elements integrated in the background.",
+            "Idea 3": f"Simple hero shot of the phone with brand colors and strong CTA for {market}.",
+        }
+
+
+def build_veo_prompt(
+    brand: str,
+    market: str,
+    asset_type: str,
+    duration: int,
+    language_note: str,
+    idea_title: str,
+    idea_description: str,
+) -> str:
+    """
+    בונה פרומפט אחד ל VEO.
+    הטקסט עצמו באנגלית, אבל כולל הנחיה לשפה של המותג.
+    """
+    segments = split_to_segments(duration)
+    creative_style = "UGC selfie" if asset_type.lower() == "video" else "Static image"
+
+    header = f"{brand} - VEO {asset_type} prompt ({duration} seconds)\n"
+    header += f"Market: {market}\n"
+    header += f"Creative style: {creative_style}\n"
+    header += f"Brand language: {language_note}\n"
+    header += f"Idea: {idea_title}\n\n"
+
+    if asset_type.lower() == "video":
+        body = (
+            "Concept:\n"
+            f"- {idea_description}\n\n"
+            "Voice and language:\n"
+            f"- All dialog, voiceover and on screen text must be in: {language_note}.\n"
+            "- Natural, conversational tone. No Hebrew. No robotic phrasing.\n\n"
+        )
+
+        body += "Structure:\n"
+        if segments == 1:
+            body += "- Create one 8 second video prompt for Google VEO.\n"
+        else:
+            body += f"- Create {segments} separate VEO prompts. Each prompt is up to 8 seconds.\n"
+            for i in range(1, segments + 1):
+                body += f"  Prompt {i}: Describe the exact shot, actions and dialog for seconds {(i - 1) * 8 + 1} to {min(i * 8, duration)}.\n"
+        body += (
+            "\nImportant rules:\n"
+            "- The phone screen is never shown directly to the camera unless I say otherwise.\n"
+            "- Keep the same actor, outfit and location between all prompts.\n"
+            "- Do not use technical words like 'voiceover' or 'scene description' in the dialog.\n"
+        )
+    else:
+        # image
+        body = (
+            "Concept:\n"
+            f"- {idea_description}\n\n"
+            "Language:\n"
+            f"- Any visible text in the image must be in: {language_note}.\n\n"
+            "Composition:\n"
+            "- 9:16 mobile first layout.\n"
+            "- Strong focus on the brand and CTA, clean and readable.\n"
+            "- No real teams or real player faces. Use generic sports visuals only.\n"
+        )
+
+    return header + body
+
+
+# ----------------- HANDLERS -----------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
     await update.message.reply_text(
-        "היי, אני creative_bot. בוא נבנה פרומפטים.\n\n"
-        "קודם כל, מה שם הברנד? (לדוגמה: betsson, Premier Africa Sports)",
-        reply_markup=ReplyKeyboardRemove(),
+        "היי, אני בוט שמייצר פרומפטים ל Google VEO.\n"
+        "נעבור כמה שלבים קצרים ואז אוציא לך 3 וריאציות שונות.\n\n"
+        "קודם כל - מה שם המותג? (לדוגמה: Premier Africa Sports / Betsson וכו')"
     )
-    return BRAND
+    return ASK_BRAND
 
 
-async def brand_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def ask_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["brand"] = update.message.text.strip()
     await update.message.reply_text(
-        "מעולה. באיזה מדינה או שוק אתה עובד? (לדוגמה: Argentina, South Africa)",
+        "מעולה.\nלאיזה שוק המודעה מיועדת? (לדוגמה: South Africa / Argentina / Italy)"
     )
-    return MARKET
+    return ASK_MARKET
 
 
-async def market_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def ask_asset_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["market"] = update.message.text.strip()
-
-    keyboard = [["English"], ["Spanish - Argentina"], ["Spanish - Peru"]]
     await update.message.reply_text(
-        "בחר שפת מותג עבור התסריט:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+        "סוג הקריאייטיב:\n"
+        "כתוב 'video' לסרטון VEO או 'image' לתמונה סטטית."
     )
-    return LANGUAGE
+    return ASK_ASSET_TYPE
 
 
-async def language_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.message.text.strip()
-    lang_code = LANGUAGE_OPTIONS.get(choice, "EN")
-    context.user_data["language"] = lang_code
+async def ask_duration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    asset_type = update.message.text.strip().lower()
+    if asset_type not in {"video", "image"}:
+        await update.message.reply_text("תכתוב בבקשה רק 'video' או 'image'.")
+        return ASK_ASSET_TYPE
 
-    keyboard = [["VEO video"], ["Image"]]
-    await update.message.reply_text(
-        "מה סוג הקריאייטיב שאתה רוצה לייצר?",
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
-    )
-    return MEDIA_TYPE
+    context.user_data["asset_type"] = asset_type
 
-
-async def media_type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    media = update.message.text.strip()
-    context.user_data["media_type"] = "video" if "video" in media.lower() else "image"
-
-    if context.user_data["media_type"] == "video":
+    if asset_type == "video":
         await update.message.reply_text(
-            "מה האורך הכולל של הסרטון בשניות? (לדוגמה: 8, 12, 16)",
-            reply_markup=ReplyKeyboardRemove(),
+            "מה האורך הכולל של הסרטון בשניות? (לדוגמה: 8, 16, 24)"
         )
-        return LENGTH
     else:
-        # For image we skip length
-        context.user_data["length"] = None
         await update.message.reply_text(
-            "איזה סגנון קריאייטיב אתה רוצה? (לדוגמה: UGC selfie, motion graphic, clean promo)",
+            "לתמונה אין אורך, אבל תכתוב '10' כדי להמשיך (זו רק דרישה טכנית של הבוט)."
         )
-        return STYLE
+    return ASK_DURATION
 
 
-async def length_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
+async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
-        total_length = int(text)
-        if total_length <= 0:
+        duration = int(update.message.text.strip())
+        if duration <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("תכתוב מספר חיובי בשניות, לדוגמה 8 או 16.")
-        return LENGTH
+        await update.message.reply_text("תכתוב מספר שניות חיובי, לדוגמה 8, 16, 24.")
+        return ASK_DURATION
 
-    context.user_data["length"] = total_length
+    context.user_data["duration"] = duration
+    await update.message.reply_text(
+        "באיזו שפה הדיאלוג והטקסט של המותג?\n"
+        "לדוגמה: 'Neutral English', 'Latin American Spanish', 'South African English'."
+    )
+    return ASK_LANGUAGE
+
+
+async def ask_idea_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["language_note"] = update.message.text.strip()
+    await update.message.reply_text(
+        "עכשיו לגבי הרעיון:\n"
+        "- אם אתה רוצה שאני אציע רעיונות - תכתוב 'random'.\n"
+        "- אם יש לך כיוון כללי משלך - תכתוב 'custom'."
+    )
+    return ASK_IDEA_MODE
+
+
+async def ask_custom_idea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    mode = update.message.text.strip().lower()
+    if mode not in {"random", "custom"}:
+        await update.message.reply_text("תכתוב רק 'random' או 'custom'.")
+        return ASK_IDEA_MODE
+
+    context.user_data["idea_mode"] = mode
+
+    if mode == "random":
+        # יש לנו כבר את כל מה שצריך - נייצר רעיונות
+        await generate_prompts(update, context)
+        return ConversationHandler.END
 
     await update.message.reply_text(
-        "איזה סגנון קריאייטיב אתה רוצה? (לדוגמה: UGC selfie, green screen, stadium POV)",
+        "תתאר לי במשפט או שניים את הרעיון הכללי של הסרטון/תמונה.\n"
+        "לדוגמה: 'Fan in Argentina checking scores during halftime with friends at a bar'."
     )
-    return STYLE
+    return ASK_CUSTOM_IDEA
 
 
-async def style_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["style"] = update.message.text.strip()
-
-    await update.message.reply_text(
-        "מה המטרה המרכזית? (לדוגמה: להגדיל הורדות, להסביר איך האפליקציה עובדת, להציג פרומו חדש)",
-    )
-    return GOAL
+async def finish_with_custom_idea(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["custom_idea"] = update.message.text.strip()
+    await generate_prompts(update, context)
+    return ConversationHandler.END
 
 
-async def goal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["goal"] = update.message.text.strip()
+async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    data: Dict[str, Any] = context.user_data
 
-    keyboard = [["רעיונות רנדומליים"], ["יש לי רעיון כללי"]]
-    await update.message.reply_text(
-        "רוצה שאני אביא 3 רעיונות שונים לגמרי, או שיש לך רעיון כללי לסרטון?",
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
-    )
-    return IDEA_MODE
+    brand = data.get("brand", "Brand")
+    market = data.get("market", "Market")
+    asset_type = data.get("asset_type", "video")
+    duration = int(data.get("duration", 16))
+    language_note = data.get("language_note", "Neutral English")
 
-
-async def idea_mode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.message.text.strip()
-
-    if "כללי" in choice:
-        context.user_data["idea_mode"] = "free"
-        await update.message.reply_text(
-            "ספר לי בקצרה את הרעיון הכללי לסרטון או לתמונה.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return FREE_IDEA
-
-    context.user_data["idea_mode"] = "random"
-    context.user_data["base_idea"] = None
-
-    return await generate_handler(update, context)
-
-
-async def free_idea_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["base_idea"] = update.message.text.strip()
-    return await generate_handler(update, context)
-
-
-# ===== Script text by language =====
-def build_script_text(brand: str, market: str, lang_code: str, idea: str) -> str:
-    code = lang_code.upper()
-
-    if code in ("ES_AR", "ES-AR", "ES"):
-        return f"""
-[HOOK]
-"Desde que uso {brand}, seguir el fútbol en {market} es muchísimo más fácil."
-
-[BODY]
-"Abro la app, veo marcadores en vivo, próximos partidos y mis jugadas en segundos.
-Todo en un solo lugar, rápido y sin complicaciones."
-
-[CTA]
-"Descarga {brand} ahora mismo y pruébala gratis."
-Idea principal del video: {idea}
-        """.strip()
-
-    if code in ("ES_PE", "ES-PE"):
-        return f"""
-[HOOK]
-"Desde que tengo {brand}, seguir el fútbol en {market} es mucho más simple."
-
-[BODY]
-"Reviso resultados en vivo, próximos partidos y mis apuestas en cuestión de segundos.
-Todo en un solo lugar, rápido y sin complicaciones."
-
-[CTA]
-"Descarga {brand} hoy mismo y pruébala gratis."
-Idea principal del video: {idea}
-        """.strip()
-
-    if code == "HE":
-        return f"""
-[HOOK]
-"מאז שהתחלתי להשתמש ב {brand}, יותר קל לי לעקוב אחרי הכדורגל ב {market}."
-
-[BODY]
-"אני פותח את האפליקציה, רואה תוצאות חיות, משחקים קרובים ומה שמעניין אותי בכמה שניות.
-הכל במקום אחד, מהר ובלי כאב ראש."
-
-[CTA]
-"תוריד את {brand} עכשיו ותנסה בחינם."
-רעיון הסרטון: {idea}
-        """.strip()
-
-    # Default English
-    return f"""
-[HOOK]
-"Since I started using {brand}, following football in {market} became much easier."
-
-[BODY]
-"I open the app, check live scores, fixtures and my picks in seconds.
-Everything is in one place, fast and simple."
-
-[CTA]
-"Download {brand} today and try it for free."
-Main idea of the video: {idea}
-    """.strip()
-
-
-# ===== Idea generation =====
-def generate_ideas(data: dict, base_idea: str | None, num: int = 3) -> list[str]:
-    brand = data["brand"]
-    market = data["market"]
-    media_type = data["media_type"]
-
-    ideas = []
-
-    if base_idea:
-        # Variations around user idea
-        templates = [
-            "POV של משתמש שכבר מכור ל {brand}, מספר בקצרה על {base}",
-            "קיצר, חבר מסביר לחבר על {brand} תוך כדי משחק על המסך - {base}",
-            "סצנה יומיומית ב {market} שמובילה ברוגע להורדת {brand} - {base}",
-        ]
-        for i in range(num):
-            t = random.choice(templates)
-            ideas.append(
-                t.format(
-                    brand=brand,
-                    market=market,
-                    base=base_idea,
-                )
-            )
+    if data.get("idea_mode") == "custom":
+        base_ideas = {
+            "Idea 1": data.get("custom_idea", ""),
+            "Idea 2": data.get("custom_idea", "") + " - alternative camera angle and slightly different pacing.",
+            "Idea 3": data.get("custom_idea", "") + " - same core message but with a different location or moment of the day.",
+        }
     else:
-        # Fully random concepts
-        if media_type == "video":
-            pool = [
-                "אוהד בודק תוצאות בזמן העבודה וקולט שהוא תמיד מקבל התראות לפני כולם עם האפליקציה",
-                "חבורה של חברים בחדר צפייה, אחד מהם מנהל את כל ההימורים שלו מהטלפון בקלות",
-                "פתיחת יום של אוהד: קפה, טלפון, לוח משחקים באפליקציה ומעקב אחרי הטיקר של המשחקים",
-                "נהג מונית בפקק שומר על קשר עם המשחקים דרך האפליקציה בלי לפספס לקוחות",
-                "סטודנט לומד בספריה ומציץ מדי פעם באפליקציה כדי לעקוב אחרי הטופס שלו",
-            ]
-        else:
-            pool = [
-                "תמונה של מסך טלפון עם לוח משחקים מלא ואוהד מחייך ברקע",
-                "קלוז אפ על יד שמחזיקה טלפון עם תוצאות חיות ואפקט ניאון סביב המספרים",
-                "קולאז של אייקוני ליגות גדולות עם לוגו של האפליקציה במרכז",
-                "רקע של אצטדיון חשוך עם מסך טלפון שמאיר במרכז ומציג את הפרומו",
-            ]
+        base_ideas = generate_random_ideas(asset_type, market)
 
-        random.shuffle(pool)
-        ideas = pool[:num]
+    await update.message.reply_text(
+        "מעבד את המידע ומייצר 3 וריאציות שונות...\n"
+        "שימו לב: כל הווריאציות כתובות באנגלית ומכוונות לשפה שביקשת עבור המותג."
+    )
 
-    return ideas
-
-
-# ===== Prompt builders =====
-def build_veo_prompt(data: dict, idea: str, variation_index: int) -> str:
-    brand = data["brand"]
-    market = data["market"]
-    style = data["style"]
-    goal = data["goal"]
-    total_length = data["length"]
-    lang_code = data["language"]
-
-    script_text = build_script_text(brand, market, lang_code, idea)
-
-    # Split into segments of max 8 seconds
-    segment_length = 8
-    num_segments = max(1, math.ceil(total_length / segment_length))
-
-    header = f"""
-Google VEO video generation prompt.
-Brand: "{brand}"
-Market: "{market}"
-Variation {variation_index}
-Total length: {total_length} seconds
-Creative style: {style}
-Objective: {goal}
-
-Concept:
-{idea}
-
-General rules:
-- Vertical 9:16 UGC friendly video.
-- Natural handheld feeling.
-- Environment, outfits and phone usage must fit {market}.
-- Never show the phone screen directly to camera.
-- Dialog must be written in the correct language for this market.
-- Dialog must fit inside the timing of each segment.
-
-Example script in target language:
-{script_text}
-    """.strip()
-
-    segments_text = []
-
-    for seg in range(num_segments):
-        start_t = seg * segment_length
-        end_t = min(total_length, (seg + 1) * segment_length)
-        seg_len = end_t - start_t
-
-        segments_text.append(
-            f"""
-Segment {seg + 1} - from {start_t} to {end_t} seconds (about {seg_len} seconds):
-
-1. Describe camera framing, movement and environment in detail.
-2. Describe actor actions and expressions.
-3. Write the exact spoken dialog for this segment in the target language.
-4. Keep the dialog short and realistic so it comfortably fits inside {seg_len} seconds.
-5. Do not mention "voiceover" or "scene description" inside the dialog.
-            """.strip()
+    for title, idea_text in base_ideas.items():
+        prompt_text = build_veo_prompt(
+            brand=brand,
+            market=market,
+            asset_type=asset_type,
+            duration=duration,
+            language_note=language_note,
+            idea_title=title,
+            idea_description=idea_text,
         )
 
-    full = header + "\n\n" + "\n\n".join(segments_text)
-    return full
+        # נשלח כל וריאציה בהודעה נפרדת כדי שיהיה נוח להעתיק
+        await update.message.reply_text(f"------\n{prompt_text}")
 
 
-def build_image_prompt(data: dict, idea: str, variation_index: int) -> str:
-    brand = data["brand"]
-    market = data["market"]
-    style = data["style"]
-    goal = data["goal"]
-    lang_code = data["language"]
-
-    script_text = build_script_text(brand, market, lang_code, idea)
-
-    prompt = f"""
-Image generation prompt.
-Brand: "{brand}"
-Market: "{market}"
-Variation {variation_index}
-Creative style: {style}
-Objective: {goal}
-
-Concept:
-{idea}
-
-Visual rules:
-- Design must look native for {market}.
-- Use colors and typography that fit a modern sports or betting app.
-- Do not use real club logos or real player faces.
-- Make the brand name and main CTA big and readable.
-
-Text language:
-- All on-image text must be in the correct language for this market.
-- Use short and punchy copy that matches this example tone:
-
-Example copy in target language:
-{script_text}
-
-Now describe:
-1. The full scene: background, foreground, props, lighting.
-2. The main subject or focal point.
-3. The exact on-image text: headline and CTA in the target language.
-    """.strip()
-
-    return prompt
-
-
-# ===== Generate handler =====
-async def generate_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    data = context.user_data
-    brand = data["brand"]
-    market = data["market"]
-    media_type = data["media_type"]
-    lang_code = data["language"]
-
-    base_idea = data.get("base_idea")
-    ideas = generate_ideas(data, base_idea, num=3)
-
-    prompts = []
-    for idx, idea in enumerate(ideas, start=1):
-        if media_type == "video":
-            p = build_veo_prompt(data, idea, idx)
-        else:
-            p = build_image_prompt(data, idea, idx)
-        prompts.append(p)
-
-    header = (
-        f"סיימתי לבנות פרומפטים עבור הברנד {brand} בשוק {market} "
-        f"ובשפה {lang_code}. קיבלת 3 וריאציות שונות.\n\n"
-        "מומלץ להעתיק כל וריאציה בנפרד לכלי היצירה."
-    )
-
-    await update.message.reply_text(header)
-
-    for idx, p in enumerate(prompts, start=1):
-        # כדי לא להיתקע על הודעות ארוכות מדי, אפשר לפצל אם תרצה.
-        await update.message.reply_text(f"וריאציה {idx}:\n\n{p}")
-
-    await update.message.reply_text(
-        "אם תרצה להשתמש באותן הגדרות ולקבל רעיונות חדשים לגמרי, שלח /again.\n"
-        "כדי להתחיל הגדרות חדשות, שלח /start.",
-    )
-
-    return ConversationHandler.END
-
-
-# ===== /again - reuse last settings =====
-async def again(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.user_data.get("brand"):
-        await update.message.reply_text("אין הגדרות קודמות בזיכרון. שלח /start כדי להתחיל מחדש.")
-        return
-
-    # כשעושים /again, נביא רעיונות רנדומליים חדשים עם אותן הגדרות
-    data = context.user_data.copy()
-    data["idea_mode"] = "random"
-    data["base_idea"] = None
-
-    brand = data["brand"]
-    market = data["market"]
-
-    await update.message.reply_text(
-        f"מייצר עכשיו רעיונות ופרומפטים חדשים עבור {brand} ב {market} על בסיס אותן הגדרות...",
-    )
-
-    ideas = generate_ideas(data, None, num=3)
-
-    prompts = []
-    for idx, idea in enumerate(ideas, start=1):
-        if data["media_type"] == "video":
-            p = build_veo_prompt(data, idea, idx)
-        else:
-            p = build_image_prompt(data, idea, idx)
-        prompts.append(p)
-
-    for idx, p in enumerate(prompts, start=1):
-        await update.message.reply_text(f"וריאציה {idx}:\n\n{p}")
-
-
-# ===== /cancel =====
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("בוטל. אם תרצה להתחיל מחדש שלח /start.")
+    await update.message.reply_text("בוט הופסק. כשתרצה להתחיל מחדש תכתוב /start.")
     return ConversationHandler.END
 
 
-# ===== Main =====
-async def main() -> None:
-    token = os.environ.get("TOKEN")
-    if not token:
-        raise RuntimeError("You must set the TOKEN environment variable with your bot token")
+# ----------------- MAIN -----------------
 
-    application = ApplicationBuilder().token(token).build()
+def main() -> None:
+    if not TOKEN:
+        raise RuntimeError(
+            "TOKEN is not set. In Render, go to Environment and add variable named TOKEN with your bot token."
+        )
+
+    application = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, brand_handler)],
-            MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, market_handler)],
-            LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, language_handler)],
-            MEDIA_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, media_type_handler)],
-            LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, length_handler)],
-            STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, style_handler)],
-            GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_handler)],
-            IDEA_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, idea_mode_handler)],
-            FREE_IDEA: [MessageHandler(filters.TEXT & ~filters.COMMAND, free_idea_handler)],
+            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)],
+            ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_asset_type)],
+            ASK_ASSET_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_duration)],
+            ASK_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
+            ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_idea_mode)],
+            ASK_IDEA_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_custom_idea)],
+            ASK_CUSTOM_IDEA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, finish_with_custom_idea)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("again", again))
+    application.add_handler(CommandHandler("cancel", cancel))
 
-    logger.info("Bot is starting with polling...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # שורת הריצה היחידה - ללא asyncio.run וללא main async
+    application.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
