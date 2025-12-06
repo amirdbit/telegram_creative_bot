@@ -81,7 +81,6 @@ def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
         },
     ]
 
-    # Choose 3 unique ideas
     ideas = random.sample(base_ideas, 3)
     return {i + 1: ideas[i] for i in range(3)}
 
@@ -148,7 +147,6 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
         lines.append(f"Total length: {length} seconds")
         lines.append("")
 
-        # Concept wording
         if user_data.get("concept_mode") == "random":
             idea_title = user_data["ideas"][user_data["chosen_idea"]]["title"]
             base_concept = user_data["ideas"][user_data["chosen_idea"]]["concept"]
@@ -227,10 +225,6 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
 
 
 def build_example_dialog(language: str, market: str, brand: str):
-    """
-    Returns a small example dialog list. It is only for flavor inside the prompt.
-    We keep it in English but instruct the model to write in the target language.
-    """
     templates = [
         [
             f'"Ok, quick check... what are today matches in {market}?"',
@@ -507,7 +501,6 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         result_text = build_whisk_prompts(user_data)
 
-    # Some prompts can be long, so we split them into smaller messages
     await send_long_message(update, context, result_text)
 
     await update.effective_message.reply_text(
@@ -519,7 +512,7 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def send_long_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     chunk_size = 3500
     for i in range(0, len(text), chunk_size):
-        chunk = text[i : i + chunk_size]
+        chunk = text[i: i + chunk_size]
         await update.effective_message.reply_text(chunk)
 
 
@@ -534,7 +527,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # -------------------------------------------------
 
 
-async def main():
+def main():
     token = os.environ.get("TOKEN")
     if not token:
         raise RuntimeError("TOKEN environment variable is not set")
@@ -563,9 +556,8 @@ async def main():
     application.add_handler(conv_handler)
 
     logger.info("Bot is starting with polling...")
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
     main()
-
