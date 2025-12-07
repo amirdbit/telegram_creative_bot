@@ -44,13 +44,30 @@ logger = logging.getLogger(__name__)
     ASK_SCENE_CONCEPT,
     ASK_VIDEO_LENGTH,
     GENERATE_PROMPTS,
-    INPUT_CONCEPT,
-    CHOOSE_IDEA_FROM_LIST, # <--- הוספתי את המשתנה החסר
+    INPUT_CONCEPT, 
+    CHOOSE_IDEA_FROM_LIST, 
 ) = range(11)
+
 
 # -------------------------------------------------
 #  Helpers: random idea banks and continuity logic
 # -------------------------------------------------
+
+def infer_native_language(market: str) -> tuple[str, str] | None:
+    """מזהה שפת מקור לפי מדינה, מחזיר (קוד שפה, תיאור)."""
+    m = (market or "").strip().lower()
+
+    if "argentina" in m:
+        return "ES", "Spanish for Argentina"
+    if "peru" in m:
+        return "ES", "Spanish for Peru"
+    if "israel" in m or "ישראל" in m:
+        return "HE", "Hebrew"
+    # בראנדים אפריקאיים משתמשים לרוב באנגלית
+    if "africa" in m or "malawi" in m or "zambia" in m:
+        return "EN", "English for the Market"
+    return None
+
 
 def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
     """מחזיר 3 רעיונות רנדומליים לוידאו VEO."""
@@ -103,7 +120,7 @@ def get_random_image_ideas(market: str) -> Dict[int, Dict[str, str]]:
 def split_to_segments(duration_sec: int) -> list[int]:
     """מחלק אורך וידאו למקטעים של עד 8 שניות."""
     segments: list[int] = []
-    remaining = max(8, min(duration_sec, 32)) # הגבלת מקסימום ל-32 שניות
+    remaining = max(8, min(duration_sec, 32)) 
     while remaining > 0:
         seg = min(8, remaining)
         segments.append(seg)
@@ -198,7 +215,7 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("")
         full_output_lines.append("--- VEO GENERATION INSTRUCTIONS ---")
         full_output_lines.append("General Rules:")
-        full_output_lines.append("- Output must be {segments} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
+        full_output_lines.append(f"- Output must be {len(segments)} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
         full_output_lines.append("- All visuals must maintain actor, outfit, lighting, and scene consistency across all segments.")
         full_output_lines.append("- The actor holds a phone but the screen is NEVER shown directly to the camera.")
         full_output_lines.append(f"- The final spoken dialog must be written entirely in {language}.")
@@ -253,7 +270,6 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
 
         # Concept
         if user_data.get("concept_mode") == "random":
-            # הגרלה מחדש של רעיון רנדומלי שונה לכל וריאציה (אם נבחר "Random")
             ideas = get_random_image_ideas(market)
             idea = random.choice(list(ideas.values()))
             full_output_lines.append(f"Creative Concept: {idea['title']} - {idea['concept']}")
@@ -271,7 +287,7 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
             "clean background in brand colors with simple icons",
         ])
 
-        full_output_lines.append("1. VISUAL: Vertical 9:16 format for mobile placement. Focus on: {layout_focus}.")
+        full_output_lines.append(f"1. VISUAL: Vertical 9:16 format for mobile placement. Focus on: {layout_focus}.")
         full_output_lines.append("2. SCENE: Describe the image contents, actor (if any), and setting. Must feel native to the market.")
         full_output_lines.append("3. BRANDING: Use official brand colors and logo. Never use real teams or copyrighted player images.")
         full_output_lines.append(f"4. TEXT: All visible text must be in {language}. Include a short, bold headline, one supporting line, and a clear CTA (e.g., Download now).")
@@ -282,7 +298,7 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
 
 
 # -------------------------------------------------
-# Telegram bot handlers (updated for new flow)
+# Telegram bot handlers
 # -------------------------------------------------
 
 
@@ -367,7 +383,6 @@ async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def ask_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["language"] = update.message.text.strip()
     
-    # הסרת המקלדת כי אנחנו רוצים טקסט חופשי (מלל חופשי בסוג קריאייטיב)
     await update.message.reply_text("OK. Please describe the creative style (UGC selfie, motion graphic, clean banner, etc.)", 
                                     reply_markup=ReplyKeyboardRemove())
     return ASK_STYLE
@@ -376,7 +391,6 @@ async def ask_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ask_actor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["style"] = update.message.text.strip()
     
-    # הסרת המקלדת כי אנחנו רוצים טקסט חופשי (מלל חופשי בשחקנים)
     await update.message.reply_text("Please describe the actor/characters (e.g., young excited African male, 3 friends watching the game, etc.)", 
                                     reply_markup=ReplyKeyboardRemove())
     return ASK_ACTOR
@@ -385,7 +399,6 @@ async def ask_actor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ask_scene_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["actor_desc"] = update.message.text.strip()
     
-    # Inline keyboard לבחירת קונספט
     keyboard = [
         [InlineKeyboardButton("Give me random ideas", callback_data="concept_random")],
         [InlineKeyboardButton("I will describe my idea", callback_data="concept_custom")],
@@ -403,12 +416,12 @@ async def ask_scene_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    
-    if query:
-        # טיפול ב-Inline keyboard של בחירת Concept Mode
+    # טיפול ב-Inline keyboard של בחירת Concept Mode
+    if update.callback_query:
+        query = update.callback_query
         await query.answer()
         mode = query.data
+        
         if mode == "concept_random":
             context.user_data["concept_mode"] = "random"
             return await handle_random_concept_selection(query, context)
@@ -418,7 +431,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
                 "Perfect. Send me a short description of the general idea for the creative (this will be the core concept)."
             )
             return INPUT_CONCEPT
-    
+
     # טיפול בהזנת טקסט (Concept Mode Custom)
     context.user_data["scene_concept"] = update.message.text.strip()
 
@@ -473,22 +486,18 @@ async def choose_idea_from_list(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     chosen = int(query.data.split("_")[1])
-    # נשמור את הרעיון שנבחר כ-scene_concept לשימוש ב-build_prompts
     context.user_data["scene_concept"] = context.user_data["ideas"][chosen]["concept"]
     
     if context.user_data["mode"] == "video":
-        # וידאו - עוברים לבחירת אורך
         await query.edit_message_text(
             "Nice, we will work with that idea.\n\nWhat is the total video length in seconds? (8, 16, 24, or 32)",
         )
-        # שולח reply keyboard חדש עם אפשרויות האורך
         keyboard = [["8", "16"], ["24", "32"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         await query.message.reply_text("Choose length:", reply_markup=reply_markup)
         
         return ASK_VIDEO_LENGTH
     else:
-        # תמונה - עוברים ישר ליצירה
         await query.edit_message_text("Nice, we will work with that idea. Generating 4 Whisk image prompts...")
         return await generate_prompts(update, context)
 
@@ -515,7 +524,6 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_data = context.user_data
     mode = user_data["mode"]
     
-    # לוודא שמקבלים עדכונים רק מההודעה האחרונה שבה השיחה הסתיימה
     if update.callback_query:
         effective_message = update.callback_query.message
     else:
@@ -559,7 +567,6 @@ def main():
     if not token:
         raise RuntimeError("TOKEN environment variable is not set") 
 
-    # Polling שקט יותר כדי למנוע רעש בלוגים
     application = ApplicationBuilder().token(token).build()
 
     conv_handler = ConversationHandler(
@@ -571,8 +578,8 @@ def main():
             ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
             ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
             ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
-            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate), # Concept Mode Buttons
-                                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)], # Custom Concept Text
+            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate), 
+                                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
             INPUT_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
             CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
             ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
@@ -588,10 +595,9 @@ def main():
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
         timeout=20,
+        drop_pending_updates=True, 
     )
 
 
 if __name__ == "__main__":
     main()
-
-
