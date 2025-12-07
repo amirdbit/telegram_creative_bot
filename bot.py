@@ -2,7 +2,8 @@ import logging
 import math
 import os
 import random
-from typing import Dict, Any
+import json
+from typing import Dict, Any, List
 
 from telegram import (
     Update,
@@ -22,6 +23,10 @@ from telegram.ext import (
     filters,
 )
 
+import google.generativeai as genai
+from google.generativeai import types
+
+
 # -------------------------------------------------
 #  Logging & Config
 # -------------------------------------------------
@@ -31,8 +36,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# TOKEN must be set as an Environment Variable in Render
+# Environment Variables
 TOKEN = os.getenv("TOKEN") 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
+
+# Gemini Configuration
+GEMINI_CLIENT = None
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_CLIENT = genai.Client()
+    except Exception as e:
+        logger.error(f"Error configuring Gemini client: {e}")
+        GEMINI_CLIENT = None
+
 
 # -------------------------------------------------
 #  States for ConversationHandler
@@ -53,11 +70,7 @@ TOKEN = os.getenv("TOKEN")
 
 
 # -------------------------------------------------
-#  Helpers & Builders
-# -------------------------------------------------
-
-# -------------------------------------------------
-#  Helpers & Builders
+#  Helpers & Idea Generation
 # -------------------------------------------------
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
@@ -73,65 +86,6 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
     if "africa" in m or "malawi" in m or "zambia" in m:
         return "EN", "English for the Market"
     return None
-
-def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """מחזיר 3 רעיונות רנדומליים לוידאו VEO."""
-    base_ideas = [
-        {
-            "title": "Match day reaction",
-            "concept": f"Fan in {market} reacting live to a key football moment while using the app.",
-        },
-        {
-            "title": "Halftime quick check",
-            "concept": f"User checks live scores and bets on the app during halftime to see what changed.",
-        },
-        {
-            "title": "On the go update",
-            "concept": f"Fan in {market} gets a loud notification from the app in a taxi or at work and celebrates.",
-        },
-        {
-            "title": "Group chat pressure",
-            "concept": "Friends tease the main character in the group chat until he finally downloads and opens the app.",
-        },
-        {
-            "title": "Weak network still working",
-            "concept": "User is in a place with bad reception but the app keeps updating scores without freezing.",
-        },
-    ]
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
-
-
-def get_random_image_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """מחזיר 3 רעיונות רנדומליים לתמונת Whisk."""
-    base_ideas = [
-        {
-            "title": "Big league spotlight",
-            "concept": f"Focus on top leagues that fans in {market} love, with bold app branding and a strong CTA.",
-        },
-        {
-            "title": "Fan celebration close up",
-            "concept": "Close up on a happy fan face with a stadium background. The fan holds a phone but the screen is not visible.",
-        },
-        {
-            "title": "Clean minimal layout",
-            "concept": "Simple background in brand colors, strong logo, one clear benefit line and a big CTA.",
-        },
-    ]
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
-
-def split_to_segments(duration_sec: int) -> list[int]:
-    """Splits video length into VEO segments (max 8s each)."""
-    segments: list[int] = []
-    remaining = max(8, min(duration_sec, 32)) 
-    while remaining > 0:
-        seg = min(8, remaining)
-        segments.append(seg)
-        remaining -= seg
-    return segments
-# ... וכו' (שאר פונקציות ה-build וה-get_random)
-
 
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
@@ -160,13 +114,94 @@ def build_example_dialog(language: str, market: str, brand: str):
     return random.choice(templates)
 
 
+def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
+    """Generates simple fallback concepts if Gemini API fails."""
+    if mode == "video":
+        titles = ["Match day reaction", "Halftime quick check", "On the go update"]
+    else:
+        titles = ["Big league spotlight", "Fan celebration close up", "Clean minimal layout"]
+        
+    return {
+        i + 1: {
+            "title": titles[i % len(titles)], 
+            "concept": f"Fallback concept {i+1}: Generic scene for {mode} creative.",
+        } 
+        for i in range(count)
+    }
+
+
+def generate_concepts_via_gemini(user_data: Dict[str, Any], count: int = 4) -> Dict[int, Dict[str, str]]:
+    """
+    Generates creative concepts using the Gemini API.
+    Uses JSON schema to ensure parsable output.
+    """
+    if not GEMINI_CLIENT:
+        return get_fallback_concepts(user_data.get("mode", "video"), count)
+
+    market = user_data["market"]
+    language = user_data["language"]
+    mode = user_data["mode"] # video or image
+    style = user_data["style"]
+
+    prompt = f"""
+You are a top-tier creative strategist. Your task is to generate {count} unique and compelling creative concepts for an ad campaign, optimized for high user acquisition (UA).
+
+The campaign parameters are:
+- Target Market: {market}
+- Target Language: {language}
+- Creative Type: {mode} (video for VEO, image for Whisk)
+- Creative Style: {style} (e.g., UGC selfie, motion graphic, clean banner)
+- Brand Context: The creative must be relevant to sports/betting applications and appeal to the local culture.
+- Constraint: Concepts must NOT violate copyright (no real teams, no real player names).
+
+Generate {count} different creative concepts. For each concept, provide a unique 'title' (short, catchy name) and a detailed 'concept' (a brief description of the scene, hook, and core emotional driver).
+
+Return the output as a single JSON object (array of objects) only, adhering strictly to the required schema below.
+"""
+
+    response_schema = types.Schema(
+        type=types.Type.ARRAY,
+        items=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "title": types.Schema(type=types.Type.STRING, description="A catchy title for the creative."),
+                "concept": types.Schema(type=types.Type.STRING, description="A brief description of the scene and emotional hook."),
+            },
+            required=["title", "concept"],
+        ),
+    )
+    
+    try:
+        response = GEMINI_CLIENT.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema,
+                temperature=0.8,
+            )
+        )
+        
+        json_content = json.loads(response.text)
+        
+        return {i+1: item for i, item in enumerate(json_content[:count])}
+
+    except Exception as e:
+        logger.error(f"Gemini API call failed: {e}")
+        return get_fallback_concepts(mode, count)
+
+
+# -------------------------------------------------
+# Prompt Builders (The "Ready-to-Paste" Output)
+# -------------------------------------------------
+
+
 def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) -> str:
     """Frame 1 Whisk prompt: תמונה סטטית לפתיחת הסרטון."""
     brand = user_data["brand"]
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
-    # נשתמש ברעיון הכללי כבסיס לסצנה
     scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
 
     return f"""
@@ -215,7 +250,6 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("")
         
         # Concept and General Rules Block
-        # Simplified Concept based on user input
         full_output_lines.append(f"Creative Concept: {scene}")
 
         full_output_lines.append("")
@@ -275,12 +309,7 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("")
 
         # Concept
-        if user_data.get("concept_mode") == "random":
-            ideas = get_random_image_ideas(market)
-            idea = random.choice(list(ideas.values()))
-            full_output_lines.append(f"Creative Concept: {idea['title']} - {idea['concept']}")
-        else:
-            full_output_lines.append(f"Creative Concept: {scene}")
+        full_output_lines.append(f"Creative Concept: {scene}")
 
         full_output_lines.append("")
         full_output_lines.append("--- WHISK GENERATION INSTRUCTIONS ---")
@@ -306,7 +335,6 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
 # -------------------------------------------------
 # Telegram bot handlers
 # -------------------------------------------------
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -430,7 +458,26 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
         
         if mode == "concept_random":
             context.user_data["concept_mode"] = "random"
-            return await handle_random_concept_selection(query, context)
+            
+            # 💥 קורא ל-Gemini ומייצר 4 רעיונות
+            concepts = generate_concepts_via_gemini(context.user_data, count=4)
+            context.user_data["ideas"] = concepts
+
+            text_lines = ["I generated 4 fresh ideas via Gemini. Choose one of the buttons below.\n"]
+            for idx, idea in concepts.items():
+                text_lines.append(f"{idx}. {idea['title']}: {idea['concept']}")
+            text = "\n".join(text_lines)
+            
+            keyboard = [
+                [InlineKeyboardButton("Idea 1", callback_data="idea_1"),
+                 InlineKeyboardButton("Idea 2", callback_data="idea_2")],
+                [InlineKeyboardButton("Idea 3", callback_data="idea_3"),
+                 InlineKeyboardButton("Idea 4", callback_data="idea_4")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(text=text, reply_markup=reply_markup)
+            return CHOOSE_IDEA_FROM_LIST
+            
         elif mode == "concept_custom":
             context.user_data["concept_mode"] = "custom"
             await query.edit_message_text(
@@ -459,40 +506,13 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
         return await generate_prompts(update, context)
 
 
-async def handle_random_concept_selection(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
-    market = context.user_data["market"]
-    mode = context.user_data["mode"]
-    
-    if mode == "video":
-        ideas = get_random_video_ideas(market)
-    else:
-        ideas = get_random_image_ideas(market)
-    
-    context.user_data["ideas"] = ideas
-    
-    text_lines = ["I generated 3 ideas. Choose one of the buttons below.\n"]
-    for idx, idea in ideas.items():
-        text_lines.append(f"{idx}. {idea['title']}: {idea['concept']}")
-    text = "\n".join(text_lines)
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("Idea 1", callback_data="idea_1"),
-            InlineKeyboardButton("Idea 2", callback_data="idea_2"),
-            InlineKeyboardButton("Idea 3", callback_data="idea_3"),
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text=text, reply_markup=reply_markup)
-    return CHOOSE_IDEA_FROM_LIST
-
-
 async def choose_idea_from_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
 
     chosen = int(query.data.split("_")[1])
-    context.user_data["scene_concept"] = context.user_data["ideas"][chosen]["concept"]
+    # נשתמש ברעיון שנבחר כ-scene_concept
+    context.user_data["scene_concept"] = context.user_data["ideas"][chosen]["concept"] 
     
     if context.user_data["mode"] == "video":
         await query.edit_message_text(
@@ -568,8 +588,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Main Function
 # -------------------------------------------------
 
-# --- החלף את פונקציית main הקיימת ---
-
 def main():
     token = os.getenv("TOKEN")
     if not token:
@@ -586,8 +604,7 @@ def main():
             ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
             ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
             ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
-            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate), 
-                                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
+            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)],
             INPUT_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
             CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
             ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
@@ -599,9 +616,6 @@ def main():
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
-    
-    # ⚠️ השינוי הסופי: שימוש ב-loop סגור ו-drop_pending_updates=True
-    # זה מבטיח שה-Conflict לא יקרה גם אם טלגרם שלח הודעות ישנות
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
@@ -612,4 +626,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
