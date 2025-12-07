@@ -23,6 +23,9 @@ from telegram.ext import (
     filters,
 )
 
+# -------------------------------------------------
+#  Gemini Imports
+# -------------------------------------------------
 import google.generativeai as genai
 from google.generativeai import types
 
@@ -36,7 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment Variables
+# Environment Variables (MUST be set in Render Dashboard)
 TOKEN = os.getenv("TOKEN") 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 
@@ -46,9 +49,12 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         GEMINI_CLIENT = genai.Client()
+        logger.info("Gemini client configured successfully.")
     except Exception as e:
         logger.error(f"Error configuring Gemini client: {e}")
         GEMINI_CLIENT = None
+else:
+    logger.warning("GEMINI_API_KEY not found. Using fallback concepts only.")
 
 
 # -------------------------------------------------
@@ -70,26 +76,26 @@ if GEMINI_API_KEY:
 
 
 # -------------------------------------------------
-#  Helpers & Idea Generation
+#  Helpers & Idea Generation (Powered by Gemini)
 # -------------------------------------------------
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
     """Detect base language from market name."""
     m = (market or "").strip().lower()
 
-    if "argentina" in m:
-        return "ES", "Spanish for Argentina"
-    if "peru" in m:
-        return "ES", "Spanish for Peru"
+    if "argentina" in m or "peru" in m:
+        return "ES", "Spanish"
     if "israel" in m or "ישראל" in m:
         return "HE", "Hebrew"
     if "africa" in m or "malawi" in m or "zambia" in m:
         return "EN", "English for the Market"
     return None
 
+
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
     segments: list[int] = []
+    # Ensures length is between 8 and 32 seconds
     remaining = max(8, min(duration_sec, 32)) 
     while remaining > 0:
         seg = min(8, remaining)
@@ -97,8 +103,46 @@ def split_to_segments(duration_sec: int) -> list[int]:
         remaining -= seg
     return segments
 
+
 def build_example_dialog(language: str, market: str, brand: str):
-    """Provides short example dialog lines for tone consistency."""
+    """
+    Provides short example dialog lines for tone consistency, 
+    matching the requested language where possible.
+    """
+    
+    # Hebrew HE
+    if language.upper() == "HE":
+        templates = [
+            [
+                f'"אוקיי, בדיקה מהירה... מה יש היום בכדורגל?"',
+                f'"וואו, {brand} שם לי הכל מסודר במקום אחד."',
+                f'"אפשר לעשות את זה בשנייה ולחזור למה שעשיתי."',
+            ],
+            [
+                f'"רגע, בוא נראה מה ה-Live Score."',
+                f'"יפה, האפליקציה כבר עדכנה. {brand} פשוט מהיר."',
+                f'"טוב, מוכן לחצי השני עכשיו."',
+            ],
+        ]
+        return random.choice(templates)
+
+    # Spanish ES (Genérico)
+    if "ES" in language.upper():
+        templates = [
+            [
+                f'"A ver, chequeo rápido... qué hay de fútbol hoy en {market}?"',
+                f'"Wow, {brand} me pone todo en un solo lugar."',
+                f'"Puedo hacer esto en segundos y volver a lo que estaba haciendo."',
+            ],
+            [
+                f'"Espera, déjame ver el marcador en vivo."',
+                f'"Buena, la app ya actualizó. {brand} nunca duerme."',
+                f'"Listo, ya estoy para el segundo tiempo."',
+            ],
+        ]
+        return random.choice(templates)
+        
+    # Default English EN
     templates = [
         [
             f'"Ok, quick check... what are today matches in {market}?"',
@@ -117,14 +161,14 @@ def build_example_dialog(language: str, market: str, brand: str):
 def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
     """Generates simple fallback concepts if Gemini API fails."""
     if mode == "video":
-        titles = ["Match day reaction", "Halftime quick check", "On the go update"]
+        titles = ["Match day reaction", "Halftime quick check", "On the go update", "Group chat pressure"]
     else:
-        titles = ["Big league spotlight", "Fan celebration close up", "Clean minimal layout"]
+        titles = ["Big league spotlight", "Fan celebration close up", "Clean minimal layout", "Top odds banner"]
         
     return {
         i + 1: {
             "title": titles[i % len(titles)], 
-            "concept": f"Fallback concept {i+1}: Generic scene for {mode} creative.",
+            "concept": f"Fallback concept {i+1}: Cannot reach Gemini API. Using generic concept.",
         } 
         for i in range(count)
     }
@@ -132,8 +176,8 @@ def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
 
 def generate_concepts_via_gemini(user_data: Dict[str, Any], count: int = 4) -> Dict[int, Dict[str, str]]:
     """
-    Generates creative concepts using the Gemini API.
-    Uses JSON schema to ensure parsable output.
+    Generates creative concepts using the Gemini API. This is the core engine.
+    Uses JSON schema to ensure reliable output.
     """
     if not GEMINI_CLIENT:
         return get_fallback_concepts(user_data.get("mode", "video"), count)
@@ -182,8 +226,10 @@ Return the output as a single JSON object (array of objects) only, adhering stri
             )
         )
         
+        # Parse the JSON output from the model
         json_content = json.loads(response.text)
         
+        # Convert list of dicts to the required dict format: {1: {...}, 2: {...}}
         return {i+1: item for i, item in enumerate(json_content[:count])}
 
     except Exception as e:
@@ -202,6 +248,7 @@ def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) ->
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
+    # If a scene concept was chosen/customized, use it.
     scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
 
     return f"""
@@ -375,7 +422,7 @@ async def ask_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     keyboard = [
         ["south africa", "argentina"],
-        ["peru", "italy"],
+        ["peru", "italy", "israel"],
     ]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=True
@@ -394,7 +441,7 @@ async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
     native_lang_info = infer_native_language(market)
     
-    keyboard = [
+    keyboard: List[List[str]] = [
         ["English"],
     ]
     if native_lang_info and native_lang_info[0] != "EN":
@@ -439,18 +486,14 @@ async def ask_scene_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if context.user_data["mode"] == "video":
-        await update.message.reply_text("Do you want me to suggest 3 random concepts or do you want to describe the general idea yourself?", 
-                                        reply_markup=reply_markup)
-    else:
-        await update.message.reply_text("Do you want me to suggest 3 random image concepts or do you want to describe the general idea yourself?", 
-                                        reply_markup=reply_markup)
+    await update.message.reply_text("Do you want me to suggest 4 random concepts (via Gemini) or do you want to describe the general idea yourself?", 
+                                    reply_markup=reply_markup)
         
     return ASK_SCENE_CONCEPT
 
 
 async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # טיפול ב-Inline keyboard של בחירת Concept Mode
+    # Handle CallbackQuery (Choosing Concept Mode)
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -459,13 +502,13 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
         if mode == "concept_random":
             context.user_data["concept_mode"] = "random"
             
-            # 💥 קורא ל-Gemini ומייצר 4 רעיונות
+            # 💥 Calls Gemini to generate 4 concepts
             concepts = generate_concepts_via_gemini(context.user_data, count=4)
             context.user_data["ideas"] = concepts
 
             text_lines = ["I generated 4 fresh ideas via Gemini. Choose one of the buttons below.\n"]
             for idx, idea in concepts.items():
-                text_lines.append(f"{idx}. {idea['title']}: {idea['concept']}")
+                text_lines.append(f"{idx}. **{idea['title']}**: {idea['concept']}")
             text = "\n".join(text_lines)
             
             keyboard = [
@@ -475,7 +518,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
                  InlineKeyboardButton("Idea 4", callback_data="idea_4")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text=text, reply_markup=reply_markup)
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='Markdown')
             return CHOOSE_IDEA_FROM_LIST
             
         elif mode == "concept_custom":
@@ -485,11 +528,11 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
             )
             return INPUT_CONCEPT
 
-    # טיפול בהזנת טקסט (Custom Concept Mode)
+    # Handle Message (Custom Concept Input)
     context.user_data["scene_concept"] = update.message.text.strip()
 
     if context.user_data["mode"] == "video":
-        # וידאו - עוברים לבחירת אורך
+        # Video - Move to length selection
         keyboard = [["8", "16"], ["24", "32"]]
         reply_markup = ReplyKeyboardMarkup(
             keyboard, resize_keyboard=True, one_time_keyboard=True
@@ -501,7 +544,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
         )
         return ASK_VIDEO_LENGTH
     else:
-        # תמונה - עוברים ישר ליצירה
+        # Image - Generate directly
         await update.message.reply_text("Got all details. Generating 4 Whisk image prompts...")
         return await generate_prompts(update, context)
 
@@ -511,12 +554,12 @@ async def choose_idea_from_list(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     chosen = int(query.data.split("_")[1])
-    # נשתמש ברעיון שנבחר כ-scene_concept
+    # Use the chosen idea's concept as the core scene_concept
     context.user_data["scene_concept"] = context.user_data["ideas"][chosen]["concept"] 
     
     if context.user_data["mode"] == "video":
         await query.edit_message_text(
-            "Nice, we will work with that idea.\n\nWhat is the total video length in seconds? (8, 16, 24, or 32)",
+            "Nice, we will work with that idea. What is the total video length in seconds? (8, 16, 24, or 32)",
         )
         keyboard = [["8", "16"], ["24", "32"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -570,7 +613,7 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def send_long_message(message: Any, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """שולח הודעה ארוכה במספר מקטעים."""
+    """Sends a long message in multiple chunks to bypass Telegram limits."""
     chunk_size = 3500
     for i in range(0, len(text), chunk_size):
         chunk = text[i: i + chunk_size]
@@ -591,6 +634,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def main():
     token = os.getenv("TOKEN")
     if not token:
+        # This will error out the Render service if TOKEN is missing
         raise RuntimeError("TOKEN environment variable is not set") 
 
     application = ApplicationBuilder().token(token).build()
@@ -616,6 +660,7 @@ def main():
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
+    # Using run_polling with drop_pending_updates=True is the most stable method for Workers.
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
