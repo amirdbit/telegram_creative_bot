@@ -40,97 +40,48 @@ logger = logging.getLogger(__name__)
     ASK_MARKET,
     ASK_LANGUAGE,
     ASK_STYLE,
-    ASK_CONCEPT_MODE,
-    INPUT_CONCEPT,
-    CHOOSE_IDEA_FROM_LIST,
+    ASK_ACTOR,
+    ASK_SCENE_CONCEPT,
     ASK_VIDEO_LENGTH,
     GENERATE_PROMPTS,
-) = range(10)
-
-# -------------------------------------------------
-#  Helpers: random idea banks
-# -------------------------------------------------
-
-
-def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """
-    Return 3 random video ideas for VEO.
-    """
-    base_ideas = [
-        {
-            "title": "Match day reaction",
-            "concept": f"Fan in {market} reacting live to a big moment while using the app.",
-        },
-        {
-            "title": "Halftime quick check",
-            "concept": f"User checks live scores and bets on the app during halftime.",
-        },
-        {
-            "title": "On the go update",
-            "concept": f"Fan in {market} gets an app notification while in a taxi or at work and celebrates.",
-        },
-        {
-            "title": "Group chat vibes",
-            "concept": "Friends teasing the main character in the group chat until he finally downloads the app.",
-        },
-        {
-            "title": "Before the match starts",
-            "concept": "User opens the app to check fixtures and prepare predictions before kick off.",
-        },
-        {
-            "title": "Weak network, still working",
-            "concept": "User is in a place with bad reception but the app keeps working and updating.",
-        },
-    ]
-
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
-
-
-def get_random_image_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """
-    Return 3 random image concepts for Whisk.
-    """
-    base_ideas = [
-        {
-            "title": "Big league spotlight",
-            "concept": f"Focus on top leagues that fans in {market} love, with bold app branding and clear CTA.",
-        },
-        {
-            "title": "Fan celebration close up",
-            "concept": f"Close up on a happy fan face, stadium background, strong light on the phone hand, but screen not visible.",
-        },
-        {
-            "title": "Multi match overview",
-            "concept": "Dynamic layout with several match score cards around the main logo and big CTA button.",
-        },
-        {
-            "title": "Notification moment",
-            "concept": "Phone on a table with a bright notification bubble from the app and strong brand elements.",
-        },
-        {
-            "title": "Clean minimal layout",
-            "concept": "Simple background in brand colors, strong logo, one clear benefit line and big CTA.",
-        },
-        {
-            "title": "Promo highlight",
-            "concept": "Large promo numbers in the center, subtle football elements around, with logo and CTA at the bottom.",
-        },
-    ]
-
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
+) = range(9)
 
 
 # -------------------------------------------------
-#  Prompt generation
+#  Helper Logic: Language and Segmentation
 # -------------------------------------------------
 
+def infer_native_language(market: str) -> tuple[str, str] | None:
+    """מזהה שפת מקור לפי מדינה, מחזיר (קוד שפה, תיאור)."""
+    m = (market or "").strip().lower()
+
+    if "argentina" in m:
+        return "ES", "Spanish for Argentina"
+    if "peru" in m:
+        return "ES", "Spanish for Peru"
+    if "israel" in m or "ישראל" in m:
+        return "HE", "Hebrew"
+    # בראנדים אפריקאיים משתמשים לרוב באנגלית
+    if "africa" in m or "malawi" in m or "zambia" in m:
+        return "EN", "English for the Market"
+    return None
+
+def split_to_segments(duration_sec: int) -> list[int]:
+    """מחלק אורך וידאו למקטעים של עד 8 שניות."""
+    segments: list[int] = []
+    remaining = max(8, min(duration_sec, 32)) # הגבלת מקסימום ל-32 שניות
+    while remaining > 0:
+        seg = min(8, remaining)
+        segments.append(seg)
+        remaining -= seg
+    return segments
+
+# -------------------------------------------------
+#  Idea banks & Dialogs (Example Dialogs in English)
+# -------------------------------------------------
 
 def build_example_dialog(language: str, market: str, brand: str):
-    """
-    Small example dialog list. זה רק טון, הטקסט הסופי אמור להיות בשפת המותג.
-    """
+    """דוגמאות לדיאלוג (טון בלבד) עבור הפרומפט, ה-VEO יתרגם לשפה הנבחרת."""
     templates = [
         [
             f'"Ok, quick check... what are today matches in {market}?"',
@@ -151,224 +102,171 @@ def build_example_dialog(language: str, market: str, brand: str):
     return random.choice(templates)
 
 
-def build_veo_prompts(user_data: Dict[str, Any]) -> str:
-    """
-    Video mode:
-    - תמיד 4 וריאציות
-    - כל וריאציה מחולקת לפרומפטים של עד 8 שניות
-    - לכל פרומפט יש דרישה לתסריט מלא בשפת המותג
-    - בסוף כל וריאציה יש גם פרומפט מוכן ל-Whisk עבור הפריים הראשון
-    """
+# -------------------------------------------------
+#  Prompt Builders (The "Ready-to-Paste" Output)
+# -------------------------------------------------
+
+
+def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) -> str:
+    """Frame 1 Whisk prompt: תמונה סטטית לפתיחת הסרטון."""
     brand = user_data["brand"]
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
-    concept = user_data["concept"]
+    scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
+
+    return f"""
+Frame 1 Whisk image prompt for variation {variation_index}
+Output: Static image (Vertical 9:16)
+
+Goal:
+- Generate the first frame of the VEO video.
+- The image must match the opening shot of the video exactly.
+- NO real teams, NO real players, NO copyrighted logos.
+
+Scene:
+- {scene}
+- Same actor look, outfit and environment as the VEO video in a natural setting.
+- The actor holds a phone but the screen is NEVER visible to the camera.
+- Lighting must be clean and realistic (UGC style).
+
+Brand and language:
+- All on image text must be written in {language}.
+- Include the {brand} logo and a clear CTA (e.g., Download now or Play now).
+
+Instructions for Whisk:
+- Describe the visual details of this single frame only.
+- Do NOT mention the word "prompt" or technical terms like "frame description".
+- Focus on lighting, mood, body language and clear placement of logo and CTA.
+""".strip()
+
+
+def build_veo_prompts(user_data: Dict[str, Any]) -> str:
+    """Video mode: 4 וריאציות VEO + Whisk Frame 1."""
+    brand = user_data["brand"]
+    market = user_data["market"]
+    language = user_data["language"]
+    style = user_data["style"]
+    scene = user_data.get("scene_concept", "Natural fan reaction to a match moment.")
+    actor = user_data.get("actor_desc", "a young, excited football fan.")
     length = user_data["video_length"]
 
-    segments = max(1, math.ceil(length / 8))
+    segments = split_to_segments(length)
     variations = 4
-
-    lines: list[str] = []
+    full_output_lines: list[str] = []
 
     for v in range(1, variations + 1):
-        lines.append("-----")
-        lines.append(f"{brand} - VEO video generation prompt")
-        lines.append(f"Market: {market}")
-        lines.append(f"Creative style: {style}")
-        lines.append(f"Brand language: {language}")
-        lines.append(f"Variation: {v}")
-        lines.append(f"Total length: {length} seconds")
-        lines.append("")
+        full_output_lines.append("="*50)
+        full_output_lines.append(f"VEO VIDEO PROMPT - VARIATION {v} (Total Length: {length} seconds)")
+        full_output_lines.append(f"Brand: {brand} | Market: {market} | Language: {language}")
+        full_output_lines.append(f"Creative Style: {style}")
+        full_output_lines.append(f"Actor/Characters: {actor}")
+        full_output_lines.append("="*50)
+        full_output_lines.append("")
+        
+        # General Rules Block
+        full_output_lines.append("General Rules for Continuity:")
+        full_output_lines.append("- Output must be {segments} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
+        full_output_lines.append("- Keep the same main actor, outfit, setting and lighting across ALL prompts in this variation.")
+        full_output_lines.append("- Vertical 9:16 UGC style with natural handheld motion.")
+        full_output_lines.append("- The actor holds a phone but the screen is NEVER shown directly to the camera.")
+        full_output_lines.append(f"- All spoken dialog must be written entirely in {language}.")
+        full_output_lines.append("")
 
-        # Concept
-        if user_data.get("concept_mode") == "random":
-            idea_title = user_data["ideas"][user_data["chosen_idea"]]["title"]
-            base_concept = user_data["ideas"][user_data["chosen_idea"]]["concept"]
-            lines.append("Concept:")
-            lines.append(f"- Title: {idea_title}")
-            lines.append(f"- Description: {base_concept}")
-            lines.append(
-                "- This variation should keep the same core idea but change the dialog, pacing and small details."
-            )
-        else:
-            lines.append("Concept:")
-            lines.append(f"- General idea: {concept}")
-            lines.append(
-                "- This variation should use a slightly different point of view and dialog compared to the others."
-            )
-
-        lines.append("")
-        lines.append("Voice and language:")
-        lines.append(f"- All dialog, voiceover and on screen text must be written in {language}.")
-        lines.append("- Do not use Hebrew.")
-        lines.append("- Use a natural, conversational tone that fits real fans.")
-        lines.append("- No robotic phrasing.")
-        lines.append("")
-
-        lines.append("Camera and character guidelines:")
-        lines.append("- Vertical 9:16 UGC style with natural handheld motion.")
-        lines.append(
-            "- Keep the same main actor, outfit, setting and lighting between all prompts in this variation."
-        )
-        lines.append("- The actor holds a phone but the screen is never shown directly to camera.")
-        lines.append("")
-
-        lines.append("Structure:")
-        lines.append(
-            f"- Create {segments} separate VEO prompts. Each prompt is for a clip of up to 8 seconds."
-        )
-        lines.append(
-            f"- For each prompt, write a complete spoken script in {language} that fits the timing of that clip."
-        )
-        lines.append(
-            "- When the video has more than one prompt, clearly separate the script for each prompt so it is easy to copy per clip."
-        )
-        lines.append("")
-
-        # per segment
-        for s in range(segments):
-            start_s = s * 8 + 1
-            end_s = min((s + 1) * 8, length)
+        # Segment Prompts (VEO)
+        for s_idx, seg_len in enumerate(segments):
+            start_s = sum(segments[:s_idx]) + 1
+            end_s = start_s + seg_len - 1
 
             focus_options = [
-                "strong emotional reaction",
-                "smooth product focus on the app",
-                "clear call to action",
-                "natural fan behavior and small details in the background",
-                "funny or relatable moment",
-                "build up and payoff in the same micro scene",
+                "strong emotional reaction to a football moment",
+                "smooth product focus on the app without showing the phone screen",
+                "clear call to action that invites the viewer to download or play",
+                "natural fan behavior and small realistic details in the background",
             ]
             focus = random.choice(focus_options)
 
             example_dialog = build_example_dialog(language, market, brand)
 
-            lines.append(f"Prompt {s + 1}: seconds {start_s} to {end_s}")
-            lines.append(
-                f"- Describe the exact framing, movement and actions for this part of the video. The focus here is {focus}."
-            )
-            lines.append(
-                f"- Write the full spoken dialog for this segment in {language}, line by line, matching the duration of seconds {start_s} to {end_s}."
-            )
-            lines.append(
-                "- Include natural pauses, short reactions and realistic wording, not just one long sentence."
-            )
-            lines.append(
-                f"- Example of the kind of dialog tone you can use (write the final text in {language}):"
-            )
+            full_output_lines.append(f"--- Prompt {s_idx + 1}/{len(segments)}: Seconds {start_s} to {end_s} ---")
+            full_output_lines.append(f"SCENE DESCRIPTION (Focus: {focus}):")
+            full_output_lines.append(f"- This is segment {s_idx + 1} of the {length} second video.")
+            
+            # Use the user's concept as the core scene
+            full_output_lines.append(f"- Core Concept: {scene}")
+            
+            full_output_lines.append(f"SPOKEN DIALOGUE (in {language}):")
+            full_output_lines.append(f"- Write the full spoken script for this {seg_len} second segment, line by line.")
+            full_output_lines.append("- Dialogue must sound realistic and fit the scene and timing.")
+            full_output_lines.append("- Example of dialogue tone to be translated and adapted:")
             for d in example_dialog:
-                lines.append(f"  {d}")
-            lines.append("")
+                full_output_lines.append(f"  {d}")
+            full_output_lines.append("")
 
-        lines.append("Important rules:")
-        lines.append("- Never show the phone screen directly to the camera unless specified.")
-        lines.append("- Avoid technical words like voiceover or scene description in the dialog text.")
-        lines.append("- Keep everything in one consistent scene per prompt.")
-        lines.append("- Make sure the final second of the last prompt has a strong and clear CTA.")
-        lines.append("")
+        # Whisk Frame 1 Prompt
+        full_output_lines.append("--- WHISK FRAME 1 PROMPT (for Image Input) ---")
+        full_output_lines.append(build_whisk_frame_prompt(user_data, v))
+        full_output_lines.append("")
 
-        # First frame Whisk prompt for this variation
-        lines.append("First-frame static image prompt for Whisk:")
-        lines.append(
-            f"- Create a vertical 9:16 image that can be used as the opening frame of this variation for {brand} in {market}."
-        )
-        lines.append(
-            "- The image must match the same main actor, outfit, location, lighting and overall mood described in the video prompts above."
-        )
-        lines.append(
-            f"- If you add text, it must be in {language}, using the same brand voice as the script."
-        )
-        lines.append("- Show the brand or app as the main hero, not real teams or real players.")
-        lines.append("- Use a clear logo and a big CTA button such as Download now or Play now.")
-        lines.append("- Keep the layout clean and readable on a small mobile screen.")
-        lines.append("")
-
-    return "\n".join(lines)
+    return "\n".join(full_output_lines)
 
 
 def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
-    """
-    Image mode only:
-    - 4 וריאציות שונות לקריאייטיבים סטטיים ב-Whisk
-    """
+    """Image mode: 4 וריאציות Whisk שונות."""
     brand = user_data["brand"]
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
-    concept = user_data["concept"]
+    scene = user_data.get("scene_concept", "Simple promo image.")
+    actor = user_data.get("actor_desc", "a young fan.")
 
     variations = 4
-    lines: list[str] = []
+    full_output_lines: list[str] = []
 
     for v in range(1, variations + 1):
-        lines.append("-----")
-        lines.append(f"{brand} - Whisk image generation prompt")
-        lines.append(f"Market: {market}")
-        lines.append(f"Creative style: {style}")
-        lines.append(f"Brand language: {language}")
-        lines.append(f"Variation: {v}")
-        lines.append("")
-
-        if user_data.get("concept_mode") == "random":
-            idea_title = user_data["ideas"][user_data["chosen_idea"]]["title"]
-            base_concept = user_data["ideas"][user_data["chosen_idea"]]["concept"]
-            lines.append("Concept:")
-            lines.append(f"- Title: {idea_title}")
-            lines.append(f"- Description: {base_concept}")
-            lines.append(
-                "- This variation should keep the same core idea but use a different composition and small details."
-            )
-        else:
-            lines.append("Concept:")
-            lines.append(f"- General idea: {concept}")
-            lines.append(
-                "- This variation should use a different camera angle, layout or moment while keeping the same message."
-            )
-
-        lines.append("")
-        lines.append("Brand and language rules:")
-        lines.append(f"- All text in the image must be in {language}.")
-        lines.append("- Do not use Hebrew.")
-        lines.append("- Show the app or brand as the main hero, not real teams or real players.")
-        lines.append("")
+        full_output_lines.append("="*50)
+        full_output_lines.append(f"WHISK IMAGE PROMPT - VARIATION {v}")
+        full_output_lines.append(f"Brand: {brand} | Market: {market} | Language: {language}")
+        full_output_lines.append(f"Creative Style: {style}")
+        full_output_lines.append(f"Actor/Characters: {actor}")
+        full_output_lines.append("="*50)
+        full_output_lines.append("")
 
         layout_focus_options = [
             "big central logo and CTA button",
-            "strong promo numbers with smaller logo",
+            "strong promo numbers with a smaller logo",
             "phone held in a hand with clear brand elements around it",
             "clean background in brand colors with simple icons",
         ]
         layout_focus = random.choice(layout_focus_options)
 
-        lines.append("Layout and composition:")
-        lines.append(f"- The layout focus for this variation is {layout_focus}.")
-        lines.append("- Keep the design in vertical 9:16 format for mobile placement.")
-        lines.append("- Use clear visual hierarchy so that logo and CTA are easy to read.")
-        lines.append("- Avoid clutter and tiny unreadable text.")
-        lines.append("")
+        full_output_lines.append("Visual Composition:")
+        full_output_lines.append(f"- The layout focus for this variation is: {layout_focus}.")
+        full_output_lines.append("- Keep the design in vertical 9:16 format for mobile placements.")
+        full_output_lines.append("- Use clear visual hierarchy so that logo, promo and CTA are easy to read.")
+        full_output_lines.append("")
 
-        lines.append("Brand elements:")
-        lines.append("- Use the official brand colors, logo and typography where possible.")
-        lines.append("- Make sure the promo or key benefit is visible without zooming.")
-        lines.append("- Never use photos of real teams or copyrighted logos.")
-        lines.append("")
+        full_output_lines.append("Core Scene:")
+        full_output_lines.append(f"- Scene: {scene}")
+        full_output_lines.append(f"- Show {actor} in a natural setting that feels native to {market}.")
+        full_output_lines.append("- The person may hold a phone, but the screen must NOT face the camera.")
+        full_output_lines.append("")
 
-        lines.append("Text and CTA:")
-        lines.append(f"- Main headline in {language} that is short, bold and easy to read.")
-        lines.append("- One supporting line explaining the benefit.")
-        lines.append("- Clear CTA like Download now or Play now at the bottom.")
-        lines.append("")
+        full_output_lines.append("Brand and Language Rules:")
+        full_output_lines.append(f"- All text on the image must be written in {language}.")
+        full_output_lines.append("- NO Hebrew. NO real teams, NO copyrighted logos.")
+        full_output_lines.append("- Main headline, supporting line, and CTA must be written in {language}.")
+        full_output_lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(full_output_lines)
 
 
 # -------------------------------------------------
-#  Telegram bot handlers
+#  Telegram bot handlers (updated for new flow)
 # -------------------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
     context.user_data.clear()
 
     keyboard = [
@@ -378,8 +276,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"Hi {user.first_name}, I will help you build ready to use prompts.\n"
-        "Choose what you want to create:",
+        "Hi! Choose what you want to create:",
         reply_markup=reply_markup,
     )
     return CHOOSING_TYPE
@@ -392,12 +289,12 @@ async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if query.data == "mode_video":
         context.user_data["mode"] = "video"
         await query.edit_message_text(
-            "Selected: VEO video prompts.\n\nFirst, send me the brand name."
+            "Selected: VEO video prompts.\n\nSend me the brand name (e.g., betsson, Premier Africa Sports)."
         )
     else:
         context.user_data["mode"] = "image"
         await query.edit_message_text(
-            "Selected: Whisk image prompts.\n\nFirst, send me the brand name."
+            "Selected: Whisk image prompts.\n\nSend me the brand name (e.g., betsson, Premier Africa Sports)."
         )
 
     return ASK_BRAND
@@ -405,17 +302,20 @@ async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def ask_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["brand"] = update.message.text.strip()
+    
+    # אם הברנד מזוהה נדלג על שאלת המדינה ונגדיר אותה כאן
 
+    # כפתורים לדוגמה
     keyboard = [
-        ["argentina", "south africa"],
+        ["south africa", "argentina"],
         ["peru", "italy"],
     ]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=True
     )
-
+    
     await update.message.reply_text(
-        "Great. What is the market? (you can tap a button or type any other market)",
+        "What is the market? (Tap a button or type any market)",
         reply_markup=reply_markup,
     )
     return ASK_MARKET
@@ -423,17 +323,27 @@ async def ask_market(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["market"] = update.message.text.strip()
-
+    market = context.user_data["market"]
+    
+    # זיהוי שפת מקור
+    native_lang_info = infer_native_language(market)
+    
     keyboard = [
-        ["english", "spanish"],
-        ["portuguese", "italian"],
+        ["English"],
     ]
+    if native_lang_info and native_lang_info[0] != "EN":
+        keyboard.insert(0, [f"Native Language ({native_lang_info[1]})"])
+    
+    # אם אין זיהוי, ניתן כפתורי ברירת מחדל
+    if not native_lang_info:
+        keyboard.append(["Spanish", "Portuguese"])
+    
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=True
     )
 
     await update.message.reply_text(
-        "What is the brand language for scripts and text? (tap a button or type your own)",
+        "What is the brand language for scripts/text? (Tap an option or type your own)",
         reply_markup=reply_markup,
     )
     return ASK_LANGUAGE
@@ -442,129 +352,53 @@ async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def ask_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["language"] = update.message.text.strip()
 
-    keyboard = [
-        ["UGC selfie", "motion graphic"],
-        ["static banner", "clean promo"],
-    ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=True
-    )
-
-    await update.message.reply_text(
-        "What is the creative style? (for example: UGC selfie, motion graphic, clean static banner)",
-        reply_markup=reply_markup,
-    )
+    # הסרת המקלדת כי אנחנו רוצים טקסט חופשי (מלל חופשי בסוג קריאייטיב)
+    await update.message.reply_text("OK. Please describe the creative style (UGC selfie, motion graphic, clean banner, etc.)", 
+                                    reply_markup=ReplyKeyboardRemove())
     return ASK_STYLE
 
 
-async def ask_concept_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def ask_actor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["style"] = update.message.text.strip()
-
-    # remove reply keyboard
-    await update.message.reply_text("OK.", reply_markup=ReplyKeyboardRemove())
-
-    keyboard = [
-        [
-            InlineKeyboardButton("Give me random ideas", callback_data="concept_random"),
-        ],
-        [
-            InlineKeyboardButton("I want to describe my idea", callback_data="concept_custom"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "Do you want me to suggest 3 random concepts or do you want to describe the general idea yourself?",
-        reply_markup=reply_markup,
-    )
-    return ASK_CONCEPT_MODE
+    
+    # הסרת המקלדת כי אנחנו רוצים טקסט חופשי (מלל חופשי בשחקנים)
+    await update.message.reply_text("Please describe the actor/characters (e.g., young excited African male, 3 friends watching the game, etc.)", 
+                                    reply_markup=ReplyKeyboardRemove())
+    return ASK_ACTOR
 
 
-async def handle_concept_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-
-    mode = context.user_data["mode"]
-    market = context.user_data["market"]
-
-    if query.data == "concept_random":
-        context.user_data["concept_mode"] = "random"
-
-        if mode == "video":
-            ideas = get_random_video_ideas(market)
-        else:
-            ideas = get_random_image_ideas(market)
-
-        context.user_data["ideas"] = ideas
-
-        text_lines = ["I generated 3 ideas. Choose one of the buttons below.\n"]
-        for idx, idea in ideas.items():
-            text_lines.append(f"{idx}. {idea['title']}: {idea['concept']}")
-        text = "\n".join(text_lines)
-
-        keyboard = [
-            [
-                InlineKeyboardButton("Idea 1", callback_data="idea_1"),
-                InlineKeyboardButton("Idea 2", callback_data="idea_2"),
-                InlineKeyboardButton("Idea 3", callback_data="idea_3"),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=text, reply_markup=reply_markup)
-        return CHOOSE_IDEA_FROM_LIST
-
-    else:
-        context.user_data["concept_mode"] = "custom"
-        await query.edit_message_text(
-            "Perfect. Send me a short description of the general idea for the creative."
-        )
-        return INPUT_CONCEPT
-
-
-async def choose_idea_from_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-
-    chosen = int(query.data.split("_")[1])
-    context.user_data["chosen_idea"] = chosen
-    context.user_data["concept"] = context.user_data["ideas"][chosen]["concept"]
-
+async def ask_scene_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["actor_desc"] = update.message.text.strip()
+    
+    # הסרת המקלדת כי אנחנו רוצים טקסט חופשי (מלל חופשי לקונספט)
     if context.user_data["mode"] == "video":
-        await query.edit_message_text("Nice, we will work with that idea.")
-
-        keyboard = [["8", "12"], ["16", "24"]]
-        reply_markup = ReplyKeyboardMarkup(
-            keyboard, resize_keyboard=True, one_time_keyboard=True
-        )
-
-        await query.message.reply_text(
-            "How many seconds should the video be? (for example: 8, 12, 16 or 24)",
-            reply_markup=reply_markup,
-        )
-        return ASK_VIDEO_LENGTH
+        await update.message.reply_text("Please write the core concept / full spoken script for the video (e.g., a fan gets a notification and celebrates, a friend shows the app to another friend, etc.)", 
+                                        reply_markup=ReplyKeyboardRemove())
     else:
-        await query.edit_message_text(
-            "Nice, we will work with that idea. Generating Whisk prompts..."
-        )
-        return await generate_prompts(update, context)
+        await update.message.reply_text("Please describe the main visual elements for the image (e.g., close-up on a phone screen showing live scores, fan celebrating in front of a stadium, etc.)", 
+                                        reply_markup=ReplyKeyboardRemove())
+        
+    return ASK_SCENE_CONCEPT
 
 
-async def save_custom_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["concept"] = update.message.text.strip()
-
+async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["scene_concept"] = update.message.text.strip()
+    
     if context.user_data["mode"] == "video":
-        keyboard = [["8", "12"], ["16", "24"]]
+        # וידאו - עוברים לבחירת אורך
+        keyboard = [["8", "16"], ["24", "32"]]
         reply_markup = ReplyKeyboardMarkup(
             keyboard, resize_keyboard=True, one_time_keyboard=True
         )
 
         await update.message.reply_text(
-            "Got it. How many seconds should the video be? (for example: 8, 12, 16 or 24)",
+            "What is the total video length in seconds? (8, 16, 24, or 32)",
             reply_markup=reply_markup,
         )
         return ASK_VIDEO_LENGTH
     else:
-        await update.message.reply_text("Got it. Generating Whisk prompts...")
+        # תמונה - עוברים ישר ליצירה
+        await update.message.reply_text("Got all details. Generating 4 Whisk image prompts...")
         return await generate_prompts(update, context)
 
 
@@ -572,20 +406,17 @@ async def ask_video_length_handler(update: Update, context: ContextTypes.DEFAULT
     text = update.message.text.strip()
     try:
         length = int(text)
-        if length <= 0:
-            raise ValueError
+        if length not in [8, 16, 24, 32]:
+             raise ValueError
     except ValueError:
-        await update.message.reply_text(
-            "Please send a valid number of seconds, for example 8, 12, 16 or 24."
-        )
+        await update.message.reply_text("Please choose a valid length (8, 16, 24, or 32).")
         return ASK_VIDEO_LENGTH
 
     context.user_data["video_length"] = length
-
-    await update.message.reply_text(
-        "Great. I am creating the full VEO prompts now...",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    
+    await update.message.reply_text("Great. Creating 4 VEO variations now, split into 8-second segments, including the Whisk Frame 1 prompts...", 
+                                    reply_markup=ReplyKeyboardRemove())
+    
     return await generate_prompts(update, context)
 
 
@@ -599,68 +430,64 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         result_text = build_whisk_prompts(user_data)
 
     await send_long_message(update, context, result_text)
-
+    
+    # לאחר יצירת הפרומפטים - סיום השיחה
     await update.effective_message.reply_text(
-        "Done. If you want to start again, send /start."
+        "Done. Your 4 creative variations are ready. Send /start to begin a new creative."
     )
     return ConversationHandler.END
 
 
 async def send_long_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """שולח הודעה ארוכה במספר מקטעים."""
     chunk_size = 3500
     for i in range(0, len(text), chunk_size):
-        chunk = text[i : i + chunk_size]
+        chunk = text[i: i + chunk_size]
         await update.effective_message.reply_text(chunk)
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text(
-        "Conversation cancelled. Send /start to begin again.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text("Conversation cancelled. Send /start to begin again.",
+                                    reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
 # -------------------------------------------------
-#  Main
+# Main Function
 # -------------------------------------------------
-
 
 def main():
     token = os.environ.get("TOKEN")
     if not token:
-        raise RuntimeError("TOKEN environment variable is not set")
+        # זה יזרוק שגיאה ב-Render אם הטוקן לא הוגדר
+        raise RuntimeError("TOKEN environment variable is not set") 
 
-    application: Application = ApplicationBuilder().token(token).build()
+    application = ApplicationBuilder().token(token).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             CHOOSING_TYPE: [CallbackQueryHandler(choose_type)],
-            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)],
+            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)], # דלגנו על ASK_MARKET אם הברנד מזוהה
             ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
             ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
-            ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_concept_mode)],
-            ASK_CONCEPT_MODE: [CallbackQueryHandler(handle_concept_mode)],
-            INPUT_CONCEPT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, save_custom_concept)
-            ],
-            CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
-            ASK_VIDEO_LENGTH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)
-            ],
+            ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
+            ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
+            ASK_SCENE_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
+            ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
     )
 
     application.add_handler(conv_handler)
-
-    logger.info("Bot is starting with polling...")
+    
+    # הגדרת Polling שקט יותר כדי להפחית רעש בלוגים
+    logger.info("Bot is starting with quiet polling...")
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        poll_interval=2.0,
+        poll_interval=2.0, # הפסקה של 2 שניות
         timeout=20,
     )
 
