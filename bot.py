@@ -521,6 +521,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Main Function
 # -------------------------------------------------
 
+# --- החלף את פונקציית main הקיימת ---
+
 def main():
     token = os.getenv("TOKEN")
     if not token:
@@ -550,6 +552,9 @@ def main():
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
+    
+    # ⚠️ השינוי הסופי: שימוש ב-loop סגור ו-drop_pending_updates=True
+    # זה מבטיח שה-Conflict לא יקרה גם אם טלגרם שלח הודעות ישנות
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
@@ -560,4 +565,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
