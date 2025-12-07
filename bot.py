@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------
-#  States for ConversationHandler
+#  States for ConversationHandler (ודא שכל השמות קיימים כאן)
 # -------------------------------------------------
 (
     CHOOSING_TYPE,
@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
     ASK_SCENE_CONCEPT,
     ASK_VIDEO_LENGTH,
     GENERATE_PROMPTS,
-) = range(9)
+    INPUT_CONCEPT, # <--- ודא שהשם הזה קיים ברשימת ה-range
+) = range(10)
 
 # -------------------------------------------------
 #  Helpers: random idea banks and continuity logic
@@ -591,3 +592,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
