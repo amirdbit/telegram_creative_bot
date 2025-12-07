@@ -56,6 +56,10 @@ TOKEN = os.getenv("TOKEN")
 #  Helpers & Builders
 # -------------------------------------------------
 
+# -------------------------------------------------
+#  Helpers & Builders
+# -------------------------------------------------
+
 def infer_native_language(market: str) -> tuple[str, str] | None:
     """Detect base language from market name."""
     m = (market or "").strip().lower()
@@ -69,6 +73,18 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
     if "africa" in m or "malawi" in m or "zambia" in m:
         return "EN", "English for the Market"
     return None
+
+def split_to_segments(duration_sec: int) -> list[int]:
+    """Splits video length into VEO segments (max 8s each)."""
+    segments: list[int] = []
+    remaining = max(8, min(duration_sec, 32)) 
+    while remaining > 0:
+        seg = min(8, remaining)
+        segments.append(seg)
+        remaining -= seg
+    return segments
+# ... וכו' (שאר פונקציות ה-build וה-get_random)
+
 
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
@@ -544,3 +560,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
