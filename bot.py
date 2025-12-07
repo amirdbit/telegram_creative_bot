@@ -74,6 +74,53 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
         return "EN", "English for the Market"
     return None
 
+def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
+    """מחזיר 3 רעיונות רנדומליים לוידאו VEO."""
+    base_ideas = [
+        {
+            "title": "Match day reaction",
+            "concept": f"Fan in {market} reacting live to a key football moment while using the app.",
+        },
+        {
+            "title": "Halftime quick check",
+            "concept": f"User checks live scores and bets on the app during halftime to see what changed.",
+        },
+        {
+            "title": "On the go update",
+            "concept": f"Fan in {market} gets a loud notification from the app in a taxi or at work and celebrates.",
+        },
+        {
+            "title": "Group chat pressure",
+            "concept": "Friends tease the main character in the group chat until he finally downloads and opens the app.",
+        },
+        {
+            "title": "Weak network still working",
+            "concept": "User is in a place with bad reception but the app keeps updating scores without freezing.",
+        },
+    ]
+    ideas = random.sample(base_ideas, 3)
+    return {i + 1: ideas[i] for i in range(3)}
+
+
+def get_random_image_ideas(market: str) -> Dict[int, Dict[str, str]]:
+    """מחזיר 3 רעיונות רנדומליים לתמונת Whisk."""
+    base_ideas = [
+        {
+            "title": "Big league spotlight",
+            "concept": f"Focus on top leagues that fans in {market} love, with bold app branding and a strong CTA.",
+        },
+        {
+            "title": "Fan celebration close up",
+            "concept": "Close up on a happy fan face with a stadium background. The fan holds a phone but the screen is not visible.",
+        },
+        {
+            "title": "Clean minimal layout",
+            "concept": "Simple background in brand colors, strong logo, one clear benefit line and a big CTA.",
+        },
+    ]
+    ideas = random.sample(base_ideas, 3)
+    return {i + 1: ideas[i] for i in range(3)}
+
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
     segments: list[int] = []
@@ -565,3 +612,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
