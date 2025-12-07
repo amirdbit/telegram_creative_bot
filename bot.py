@@ -23,13 +23,16 @@ from telegram.ext import (
 )
 
 # -------------------------------------------------
-#  Logging
+#  Logging & Config
 # -------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# TOKEN must be set as an Environment Variable in Render
+TOKEN = os.getenv("TOKEN") 
 
 # -------------------------------------------------
 #  States for ConversationHandler
@@ -50,11 +53,11 @@ logger = logging.getLogger(__name__)
 
 
 # -------------------------------------------------
-#  Helpers: random idea banks and continuity logic
+#  Helpers & Builders
 # -------------------------------------------------
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
-    """מזהה שפת מקור לפי מדינה, מחזיר (קוד שפה, תיאור)."""
+    """Detect base language from market name."""
     m = (market or "").strip().lower()
 
     if "argentina" in m:
@@ -63,62 +66,12 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
         return "ES", "Spanish for Peru"
     if "israel" in m or "ישראל" in m:
         return "HE", "Hebrew"
-    # בראנדים אפריקאיים משתמשים לרוב באנגלית
     if "africa" in m or "malawi" in m or "zambia" in m:
         return "EN", "English for the Market"
     return None
 
-
-def get_random_video_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """מחזיר 3 רעיונות רנדומליים לוידאו VEO."""
-    base_ideas = [
-        {
-            "title": "Match day reaction",
-            "concept": f"Fan in {market} reacting live to a key football moment while using the app.",
-        },
-        {
-            "title": "Halftime quick check",
-            "concept": f"User checks live scores and bets on the app during halftime to see what changed.",
-        },
-        {
-            "title": "On the go update",
-            "concept": f"Fan in {market} gets a loud notification from the app in a taxi or at work and celebrates.",
-        },
-        {
-            "title": "Group chat pressure",
-            "concept": "Friends tease the main character in the group chat until he finally downloads and opens the app.",
-        },
-        {
-            "title": "Weak network still working",
-            "concept": "User is in a place with bad reception but the app keeps updating scores without freezing.",
-        },
-    ]
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
-
-
-def get_random_image_ideas(market: str) -> Dict[int, Dict[str, str]]:
-    """מחזיר 3 רעיונות רנדומליים לתמונת Whisk."""
-    base_ideas = [
-        {
-            "title": "Big league spotlight",
-            "concept": f"Focus on top leagues that fans in {market} love, with bold app branding and a strong CTA.",
-        },
-        {
-            "title": "Fan celebration close up",
-            "concept": "Close up on a happy fan face with a stadium background. The fan holds a phone but the screen is not visible.",
-        },
-        {
-            "title": "Clean minimal layout",
-            "concept": "Simple background in brand colors, strong logo, one clear benefit line and a big CTA.",
-        },
-    ]
-    ideas = random.sample(base_ideas, 3)
-    return {i + 1: ideas[i] for i in range(3)}
-
-
 def split_to_segments(duration_sec: int) -> list[int]:
-    """מחלק אורך וידאו למקטעים של עד 8 שניות."""
+    """Splits video length into VEO segments (max 8s each)."""
     segments: list[int] = []
     remaining = max(8, min(duration_sec, 32)) 
     while remaining > 0:
@@ -127,9 +80,8 @@ def split_to_segments(duration_sec: int) -> list[int]:
         remaining -= seg
     return segments
 
-
 def build_example_dialog(language: str, market: str, brand: str):
-    """דוגמאות לדיאלוג (טון בלבד) עבור הפרומפט."""
+    """Provides short example dialog lines for tone consistency."""
     templates = [
         [
             f'"Ok, quick check... what are today matches in {market}?"',
@@ -145,17 +97,13 @@ def build_example_dialog(language: str, market: str, brand: str):
     return random.choice(templates)
 
 
-# -------------------------------------------------
-# Prompt Builders (The "Ready-to-Paste" Output)
-# -------------------------------------------------
-
-
 def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) -> str:
     """Frame 1 Whisk prompt: תמונה סטטית לפתיחת הסרטון."""
     brand = user_data["brand"]
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
+    # נשתמש ברעיון הכללי כבסיס לסצנה
     scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
 
     return f"""
@@ -204,13 +152,8 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("")
         
         # Concept and General Rules Block
-        if user_data.get("concept_mode") == "random":
-            # הגרלה מחדש של רעיון רנדומלי שונה לכל וריאציה (אם נבחר "Random")
-            ideas = get_random_video_ideas(market)
-            idea = random.choice(list(ideas.values()))
-            full_output_lines.append(f"Creative Concept: {idea['title']} - {idea['concept']}")
-        else:
-            full_output_lines.append(f"Creative Concept: {scene}")
+        # Simplified Concept based on user input
+        full_output_lines.append(f"Creative Concept: {scene}")
 
         full_output_lines.append("")
         full_output_lines.append("--- VEO GENERATION INSTRUCTIONS ---")
@@ -432,7 +375,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
             )
             return INPUT_CONCEPT
 
-    # טיפול בהזנת טקסט (Concept Mode Custom)
+    # טיפול בהזנת טקסט (Custom Concept Mode)
     context.user_data["scene_concept"] = update.message.text.strip()
 
     if context.user_data["mode"] == "video":
@@ -563,7 +506,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # -------------------------------------------------
 
 def main():
-    token = os.environ.get("TOKEN")
+    token = os.getenv("TOKEN")
     if not token:
         raise RuntimeError("TOKEN environment variable is not set") 
 
