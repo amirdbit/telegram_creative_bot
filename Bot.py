@@ -48,11 +48,13 @@ GEMINI_CLIENT = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        GEMINI_CLIENT = genai.Client()
         logger.info("Gemini client configured successfully.")
+        
+        # 💡 התיקון: אנחנו לא צריכים ליצור אובייקט Client. 
+        # הקריאות ל-generate_content יפעלו ישירות דרך genai.
+        
     except Exception as e:
         logger.error(f"Error configuring Gemini client: {e}")
-        GEMINI_CLIENT = None
 else:
     logger.warning("GEMINI_API_KEY not found. Using fallback concepts only.")
 
@@ -210,8 +212,7 @@ Return the output as a single JSON object (array of objects) only.
     )
     
     try:
-        response = GEMINI_CLIENT.models.generate_content(
-            model='gemini-2.5-flash',
+        response = genai.GenerativeModel('gemini-2.5-flash').generate_content( # 💡 שימוש ישיר ב-genai
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -656,5 +657,6 @@ states={
 
 if __name__ == "__main__":
     main()
+
 
 
