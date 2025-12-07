@@ -76,7 +76,7 @@ else:
 
 
 # -------------------------------------------------
-#  Helpers & Idea Generation (Powered by Gemini)
+#  Helpers & Idea Generation (All functions needed for the bot)
 # -------------------------------------------------
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
@@ -95,7 +95,6 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
     segments: list[int] = []
-    # Ensures length is between 8 and 32 seconds
     remaining = max(8, min(duration_sec, 32)) 
     while remaining > 0:
         seg = min(8, remaining)
@@ -105,10 +104,7 @@ def split_to_segments(duration_sec: int) -> list[int]:
 
 
 def build_example_dialog(language: str, market: str, brand: str):
-    """
-    Provides short example dialog lines for tone consistency, 
-    matching the requested language where possible.
-    """
+    """Provides short example dialog lines for tone consistency."""
     
     # Hebrew HE
     if language.upper() == "HE":
@@ -161,7 +157,7 @@ def build_example_dialog(language: str, market: str, brand: str):
 def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
     """Generates simple fallback concepts if Gemini API fails."""
     if mode == "video":
-        titles = ["Match day reaction", "Halftime quick check", "On the go update", "Group chat pressure"]
+        titles = ["Match day reaction", "Halftime quick check", "On the go update", "Weak network still working"]
     else:
         titles = ["Big league spotlight", "Fan celebration close up", "Clean minimal layout", "Top odds banner"]
         
@@ -176,15 +172,14 @@ def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
 
 def generate_concepts_via_gemini(user_data: Dict[str, Any], count: int = 4) -> Dict[int, Dict[str, str]]:
     """
-    Generates creative concepts using the Gemini API. This is the core engine.
-    Uses JSON schema to ensure reliable output.
+    Generates creative concepts using the Gemini API.
     """
     if not GEMINI_CLIENT:
         return get_fallback_concepts(user_data.get("mode", "video"), count)
 
     market = user_data["market"]
     language = user_data["language"]
-    mode = user_data["mode"] # video or image
+    mode = user_data["mode"] 
     style = user_data["style"]
 
     prompt = f"""
@@ -195,12 +190,11 @@ The campaign parameters are:
 - Target Language: {language}
 - Creative Type: {mode} (video for VEO, image for Whisk)
 - Creative Style: {style} (e.g., UGC selfie, motion graphic, clean banner)
-- Brand Context: The creative must be relevant to sports/betting applications and appeal to the local culture.
 - Constraint: Concepts must NOT violate copyright (no real teams, no real player names).
 
-Generate {count} different creative concepts. For each concept, provide a unique 'title' (short, catchy name) and a detailed 'concept' (a brief description of the scene, hook, and core emotional driver).
+Generate {count} different creative concepts. For each concept, provide a unique 'title' and a detailed 'concept'.
 
-Return the output as a single JSON object (array of objects) only, adhering strictly to the required schema below.
+Return the output as a single JSON object (array of objects) only.
 """
 
     response_schema = types.Schema(
@@ -208,8 +202,8 @@ Return the output as a single JSON object (array of objects) only, adhering stri
         items=types.Schema(
             type=types.Type.OBJECT,
             properties={
-                "title": types.Schema(type=types.Type.STRING, description="A catchy title for the creative."),
-                "concept": types.Schema(type=types.Type.STRING, description="A brief description of the scene and emotional hook."),
+                "title": types.Schema(type=types.Type.STRING),
+                "concept": types.Schema(type=types.Type.STRING),
             },
             required=["title", "concept"],
         ),
@@ -226,20 +220,13 @@ Return the output as a single JSON object (array of objects) only, adhering stri
             )
         )
         
-        # Parse the JSON output from the model
         json_content = json.loads(response.text)
         
-        # Convert list of dicts to the required dict format: {1: {...}, 2: {...}}
         return {i+1: item for i, item in enumerate(json_content[:count])}
 
     except Exception as e:
         logger.error(f"Gemini API call failed: {e}")
         return get_fallback_concepts(mode, count)
-
-
-# -------------------------------------------------
-# Prompt Builders (The "Ready-to-Paste" Output)
-# -------------------------------------------------
 
 
 def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) -> str:
@@ -248,7 +235,6 @@ def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) ->
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
-    # If a scene concept was chosen/customized, use it.
     scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
 
     return f"""
@@ -296,7 +282,6 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("="*50)
         full_output_lines.append("")
         
-        # Concept and General Rules Block
         full_output_lines.append(f"Creative Concept: {scene}")
 
         full_output_lines.append("")
@@ -355,13 +340,11 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
         full_output_lines.append("="*50)
         full_output_lines.append("")
 
-        # Concept
         full_output_lines.append(f"Creative Concept: {scene}")
 
         full_output_lines.append("")
         full_output_lines.append("--- WHISK GENERATION INSTRUCTIONS ---")
         
-        # Layout and Composition
         layout_focus = random.choice([
             "big central logo and CTA button",
             "strong promo numbers with a smaller logo",
@@ -493,7 +476,7 @@ async def ask_scene_concept(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Handle CallbackQuery (Choosing Concept Mode)
+    # Handler for Inline Keyboard (Choosing Concept Mode)
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -508,6 +491,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
 
             text_lines = ["I generated 4 fresh ideas via Gemini. Choose one of the buttons below.\n"]
             for idx, idea in concepts.items():
+                # Note: The actual display of ideas happens here, not in the build_prompts functions
                 text_lines.append(f"{idx}. **{idea['title']}**: {idea['concept']}")
             text = "\n".join(text_lines)
             
@@ -528,7 +512,7 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
             )
             return INPUT_CONCEPT
 
-    # Handle Message (Custom Concept Input)
+    # Handler for Message (Custom Concept Input)
     context.user_data["scene_concept"] = update.message.text.strip()
 
     if context.user_data["mode"] == "video":
@@ -634,7 +618,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def main():
     token = os.getenv("TOKEN")
     if not token:
-        # This will error out the Render service if TOKEN is missing
         raise RuntimeError("TOKEN environment variable is not set") 
 
     application = ApplicationBuilder().token(token).build()
@@ -660,7 +643,6 @@ def main():
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
-    # Using run_polling with drop_pending_updates=True is the most stable method for Workers.
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
