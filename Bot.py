@@ -624,16 +624,23 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
-        states={
+states={
             CHOOSING_TYPE: [CallbackQueryHandler(choose_type)],
             ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)], 
             ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
             ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
             ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
             ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
-            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)],
+            
+            # ASK_SCENE_CONCEPT מוביל לבחירת קונספט (Handler יטפל ב-Random/Custom)
+            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)], 
+            
+            # INPUT_CONCEPT הוא שלב הקלט הטקסטואלי החופשי
             INPUT_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
+            
+            # 💡 תיקון: שלב הבחירה מתוך הרשימה מפנה ישירות ל-Handler שמוביל ל-ASK_VIDEO_LENGTH/Generate
             CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
+            
             ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -653,3 +660,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
