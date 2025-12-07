@@ -142,73 +142,75 @@ Instructions for Whisk:
 
 
 def build_veo_prompts(user_data: Dict[str, Any]) -> str:
-    """Video mode: 4 וריאציות VEO + Whisk Frame 1."""
+    """
+    Video mode:
+    - תמיד 4 וריאציות
+    - כל וריאציה מחולקת לפרומפטים של עד 8 שניות
+    - לכל פרומפט יש דרישה לתסריט מלא בשפת המותג
+    - בסוף כל וריאציה יש גם פרומפט מוכן ל-Whisk עבור הפריים הראשון
+    """
     brand = user_data["brand"]
     market = user_data["market"]
     language = user_data["language"]
     style = user_data["style"]
-    scene = user_data.get("scene_concept", "Natural fan reaction to a match moment.")
-    actor = user_data.get("actor_desc", "a young, excited football fan.")
+    concept = user_data["concept"]
     length = user_data["video_length"]
 
-    segments = split_to_segments(length)
+    segments = max(1, math.ceil(length / 8))
     variations = 4
-    full_output_lines: list[str] = []
+
+    lines: list[str] = []
 
     for v in range(1, variations + 1):
-        full_output_lines.append("="*50)
-        full_output_lines.append(f"VEO VIDEO PROMPT - VARIATION {v} (Total Length: {length} seconds)")
-        full_output_lines.append(f"Brand: {brand} | Market: {market} | Language: {language}")
-        full_output_lines.append(f"Creative Style: {style}")
-        full_output_lines.append(f"Actor/Characters: {actor}")
-        full_output_lines.append("="*50)
-        full_output_lines.append("")
+        lines.append("="*20)
+        lines.append(f"VEO PROMPT - VARIATION {v} (Total Length: {length}s)")
+        lines.append("="*20)
         
-        # General Rules Block
-        full_output_lines.append("General Rules for Continuity:")
-        full_output_lines.append("- Output must be {segments} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
-        full_output_lines.append("- Keep the same main actor, outfit, setting and lighting across ALL prompts in this variation.")
-        full_output_lines.append("- Vertical 9:16 UGC style with natural handheld motion.")
-        full_output_lines.append("- The actor holds a phone but the screen is NEVER shown directly to the camera.")
-        full_output_lines.append(f"- All spoken dialog must be written entirely in {language}.")
-        full_output_lines.append("")
+        # Concept - הופך להיות חלק מהפרומפט
+        if user_data.get("concept_mode") == "random":
+            idea_title = user_data["ideas"][user_data["chosen_idea"]]["title"]
+            base_concept = user_data["ideas"][user_data["chosen_idea"]]["concept"]
+            lines.append(f"Creative Concept: {idea_title} - {base_concept}")
+        else:
+            lines.append(f"Creative Concept: {concept}")
 
-        # Segment Prompts (VEO)
-        for s_idx, seg_len in enumerate(segments):
-            start_s = sum(segments[:s_idx]) + 1
-            end_s = start_s + seg_len - 1
+        lines.append(f"Market: {market}, Brand: {brand}, Style: {style}, Language: {language}")
+        lines.append("")
+        lines.append("--- VEO GENERATION INSTRUCTIONS ---")
+        
+        lines.append(f"Generate {segments} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
+        lines.append(f"The final spoken dialog must be written entirely in {language}.")
+        lines.append("All visuals must maintain actor, outfit, lighting, and scene consistency across all segments.")
+        lines.append("Never show the phone screen directly to the camera.")
+        lines.append("")
 
-            focus_options = [
-                "strong emotional reaction to a football moment",
-                "smooth product focus on the app without showing the phone screen",
+        # Per segment prompt
+        for s in range(segments):
+            start_s = s * 8 + 1
+            end_s = min((s + 1) * 8, length)
+            segment_len = end_s - start_s + 1 # זמן מקסימלי לדיבור
+
+            focus = random.choice([
+                "strong emotional reaction to a football moment", 
                 "clear call to action that invites the viewer to download or play",
                 "natural fan behavior and small realistic details in the background",
-            ]
-            focus = random.choice(focus_options)
-
+            ])
             example_dialog = build_example_dialog(language, market, brand)
 
-            full_output_lines.append(f"--- Prompt {s_idx + 1}/{len(segments)}: Seconds {start_s} to {end_s} ---")
-            full_output_lines.append(f"SCENE DESCRIPTION (Focus: {focus}):")
-            full_output_lines.append(f"- This is segment {s_idx + 1} of the {length} second video.")
-            
-            # Use the user's concept as the core scene
-            full_output_lines.append(f"- Core Concept: {scene}")
-            
-            full_output_lines.append(f"SPOKEN DIALOGUE (in {language}):")
-            full_output_lines.append(f"- Write the full spoken script for this {seg_len} second segment, line by line.")
-            full_output_lines.append("- Dialogue must sound realistic and fit the scene and timing.")
-            full_output_lines.append("- Example of dialogue tone to be translated and adapted:")
+            lines.append(f"--- VEO SEGMENT {s + 1} of {segments} ({seg_len}s) ---")
+            lines.append(f"1. VISUAL: Vertical 9:16. Describe exact framing, movement, and scene actions for seconds {start_s} to {end_s}. Focus on: {focus}.")
+            lines.append(f"2. DIALOG: Write the full spoken script for this segment in {language}. Must fit comfortably in {seg_len} seconds.")
+            lines.append(f"   Dialogue Tone Example (must be written in {language} in final prompt):")
             for d in example_dialog:
-                full_output_lines.append(f"  {d}")
-            full_output_lines.append("")
+                lines.append(f"   {d}")
+            lines.append("")
 
         # Whisk Frame 1 Prompt
-        full_output_lines.append("--- WHISK FRAME 1 PROMPT (for Image Input) ---")
-        full_output_lines.append(build_whisk_frame_prompt(user_data, v))
-        full_output_lines.append("")
+        lines.append("--- WHISK FRAME 1 PROMPT (Ready-to-Paste for Image Input) ---")
+        lines.append(build_whisk_frame_prompt(user_data, v))
+        lines.append("")
 
-    return "\n".join(full_output_lines)
+    return "\n".join(lines)
 
 
 def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
@@ -223,42 +225,53 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
     variations = 4
     full_output_lines: list[str] = []
 
-    for v in range(1, variations + 1):
-        full_output_lines.append("="*50)
-        full_output_lines.append(f"WHISK IMAGE PROMPT - VARIATION {v}")
-        full_output_lines.append(f"Brand: {brand} | Market: {market} | Language: {language}")
-        full_output_lines.append(f"Creative Style: {style}")
-        full_output_lines.append(f"Actor/Characters: {actor}")
-        full_output_lines.append("="*50)
-        full_output_lines.append("")
+def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
+    """
+    Image mode only:
+    - 4 וריאציות שונות לקריאייטיבים סטטיים ב-Whisk
+    - מחזיר פרומפטים נקיים להדבקה
+    """
+    brand = user_data["brand"]
+    market = user_data["market"]
+    language = user_data["language"]
+    style = user_data["style"]
+    concept = user_data["concept"]
+    
+    variations = 4
+    lines: list[str] = []
 
-        layout_focus_options = [
+    for v in range(1, variations + 1):
+        lines.append("="*20)
+        lines.append(f"WHISK IMAGE PROMPT - VARIATION {v}")
+        lines.append("="*20)
+
+        # Concept
+        if user_data.get("concept_mode") == "random":
+            idea_title = user_data["ideas"][user_data["chosen_idea"]]["title"]
+            base_concept = user_data["ideas"][user_data["chosen_idea"]]["concept"]
+            lines.append(f"Creative Concept: {idea_title} - {base_concept}")
+        else:
+            lines.append(f"Creative Concept: {concept}")
+
+        lines.append(f"Market: {market}, Brand: {brand}, Style: {style}, Language: {language}")
+        lines.append("")
+        lines.append("--- WHISK GENERATION INSTRUCTIONS ---")
+        
+        # Layout and Composition
+        layout_focus = random.choice([
             "big central logo and CTA button",
             "strong promo numbers with a smaller logo",
             "phone held in a hand with clear brand elements around it",
             "clean background in brand colors with simple icons",
-        ]
-        layout_focus = random.choice(layout_focus_options)
+        ])
+        lines.append(f"1. VISUAL: Vertical 9:16 format for mobile placement. Focus on: {layout_focus}.")
+        lines.append("2. SCENE: Describe the image contents, actor (if any), and setting. Must feel native to the market.")
+        lines.append("3. BRANDING: Use official brand colors and logo. Never use real teams or copyrighted player images.")
+        lines.append(f"4. TEXT: All visible text must be in {language}. Include a short, bold headline, one supporting line, and a clear CTA (e.g., Download now).")
+        lines.append("--- END PROMPT ---")
+        lines.append("")
 
-        full_output_lines.append("Visual Composition:")
-        full_output_lines.append(f"- The layout focus for this variation is: {layout_focus}.")
-        full_output_lines.append("- Keep the design in vertical 9:16 format for mobile placements.")
-        full_output_lines.append("- Use clear visual hierarchy so that logo, promo and CTA are easy to read.")
-        full_output_lines.append("")
-
-        full_output_lines.append("Core Scene:")
-        full_output_lines.append(f"- Scene: {scene}")
-        full_output_lines.append(f"- Show {actor} in a natural setting that feels native to {market}.")
-        full_output_lines.append("- The person may hold a phone, but the screen must NOT face the camera.")
-        full_output_lines.append("")
-
-        full_output_lines.append("Brand and Language Rules:")
-        full_output_lines.append(f"- All text on the image must be written in {language}.")
-        full_output_lines.append("- NO Hebrew. NO real teams, NO copyrighted logos.")
-        full_output_lines.append("- Main headline, supporting line, and CTA must be written in {language}.")
-        full_output_lines.append("")
-
-    return "\n".join(full_output_lines)
+    return "\n".join(lines)
 
 
 # -------------------------------------------------
@@ -494,3 +507,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
