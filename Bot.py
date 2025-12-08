@@ -81,6 +81,22 @@ else:
 #  Helpers & Idea Generation (All functions needed for the bot)
 # -------------------------------------------------
 
+# -------------------------------------------------
+# פונקציה לתיקון שגיאת NameError (שלב 1)
+# -------------------------------------------------
+def get_random_video_ideas(market):
+    """
+    פונקציה זו מחזירה רשימת רעיונות וידאו רנדומליים לפי השוק שנבחר.
+    (זו ההגדרה החסרה שגרמה לקריסת ה-NameError)
+    """
+    # אנא מלא כאן את הרעיונות הספציפיים שלך.
+    # זו דוגמה בלבד כדי לאפשר לקוד לרוץ:
+    if market == "ישראל":
+        return ["רעיון מוצר מקורי", "רעיון ויראלי", "רעיון לפרסומת קצרה"]
+    else:
+        return ["Global viral idea", "Short ad concept", "Product review idea"]
+
+
 def infer_native_language(market: str) -> tuple[str, str] | None:
     """Detect base language from market name."""
     m = (market or "").strip().lower()
@@ -657,6 +673,7 @@ states={
 
 if __name__ == "__main__":
     main()
+
 
 
 
