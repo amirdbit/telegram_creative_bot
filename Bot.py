@@ -86,15 +86,13 @@ else:
 # -------------------------------------------------
 def get_random_video_ideas(market):
     """
-    פונקציה זו מחזירה רשימת רעיונות וידאו רנדומליים לפי השוק שנבחר.
-    (זו ההגדרה החסרה שגרמה לקריסת ה-NameError)
+    פונקציה זו נועדה לפתור את שגיאת NameError.
+    היא צריכה להחזיר 3 רעיונות לפי השוק.
     """
-    # אנא מלא כאן את הרעיונות הספציפיים שלך.
-    # זו דוגמה בלבד כדי לאפשר לקוד לרוץ:
     if market == "ישראל":
         return ["רעיון מוצר מקורי", "רעיון ויראלי", "רעיון לפרסומת קצרה"]
     else:
-        return ["Global viral idea", "Short ad concept", "Product review idea"]
+        return ["Random idea 1", "Random idea 2", "Random idea 3"]
 
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
@@ -673,6 +671,7 @@ states={
 
 if __name__ == "__main__":
     main()
+
 
 
 
