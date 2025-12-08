@@ -73,8 +73,8 @@ else:
     ASK_VIDEO_LENGTH,
     GENERATE_PROMPTS,
     INPUT_CONCEPT, 
-    CHOOSE_IDEA_FROM_LIST, # <--- ⚠️ ודא שזה מופיע כאן
-) = range(11)
+    CHOOSE_IDEA_FROM_LIST,
+) = range(1, 12) # 💡 שימו לב: מתחיל מ-1 ומסתיים ב-12.
 
 
 # -------------------------------------------------
@@ -661,6 +661,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
