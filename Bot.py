@@ -637,14 +637,18 @@ def main():
 
     application = ApplicationBuilder().token(token).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        # 💡 התיקון: אנחנו צריכים להכניס את CHOOSING_TYPE לבלוק ה-States הראשי
         states={
-            #... (כל ה-States נשארים זהים) ...
+            CHOOSING_TYPE: [CallbackQueryHandler(choose_type)], # <--- ה-State הראשון חייב להיות מוגדר כאן
+            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)], 
+            # ... כל שאר ה-States ...
+            # ...
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,
-    )
+        allow_reentry=True,
+    )
 
     application.add_handler(conv_handler)
     
@@ -661,6 +665,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
