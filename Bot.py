@@ -1,5 +1,4 @@
 import logging
-import math
 import os
 import random
 import json
@@ -40,19 +39,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Environment Variables (MUST be set in Render Dashboard)
-TOKEN = os.getenv("TOKEN") 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
+TOKEN = os.getenv("TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Gemini Configuration
-GEMINI_CLIENT = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         logger.info("Gemini client configured successfully.")
-        
-        # 💡 התיקון: אנחנו לא צריכים ליצור אובייקט Client. 
-        # הקריאות ל-generate_content יפעלו ישירות דרך genai.
-        
     except Exception as e:
         logger.error(f"Error configuring Gemini client: {e}")
 else:
@@ -60,7 +54,7 @@ else:
 
 
 # -------------------------------------------------
-#  States for ConversationHandler
+#  States for ConversationHandler (FIXED: Starting from 100)
 # -------------------------------------------------
 (
     CHOOSING_TYPE,
@@ -74,25 +68,23 @@ else:
     GENERATE_PROMPTS,
     INPUT_CONCEPT, 
     CHOOSE_IDEA_FROM_LIST,
-) = range(100, 111) # 💡 מתחילים מ-100 כדי למנוע קונפליקטים עם 0 ו-1
+) = range(100, 111)
 
 
 # -------------------------------------------------
 #  Helpers & Idea Generation (All functions needed for the bot)
 # -------------------------------------------------
 
-# -------------------------------------------------
-# פונקציה לתיקון שגיאת NameError (שלב 1)
-# -------------------------------------------------
+# FIX for NameError: get_random_video_ideas
 def get_random_video_ideas(market):
     """
-    פונקציה זו נועדה לפתור את שגיאת NameError.
-    היא צריכה להחזיר 3 רעיונות לפי השוק.
+    Dummy function to resolve NameError: get_random_video_ideas is not defined.
+    Uses market information, returns placeholder data.
     """
     if market == "ישראל":
         return ["רעיון מוצר מקורי", "רעיון ויראלי", "רעיון לפרסומת קצרה"]
     else:
-        return ["Random idea 1", "Random idea 2", "Random idea 3"]
+        return ["Global viral idea", "Short ad concept", "Product review idea"]
 
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
@@ -111,7 +103,7 @@ def infer_native_language(market: str) -> tuple[str, str] | None:
 def split_to_segments(duration_sec: int) -> list[int]:
     """Splits video length into VEO segments (max 8s each)."""
     segments: list[int] = []
-    remaining = max(8, min(duration_sec, 32)) 
+    remaining = max(8, min(duration_sec, 32))
     while remaining > 0:
         seg = min(8, remaining)
         segments.append(seg)
@@ -190,7 +182,7 @@ def generate_concepts_via_gemini(user_data: Dict[str, Any], count: int = 4) -> D
     """
     Generates creative concepts using the Gemini API.
     """
-    if not GEMINI_CLIENT:
+    if not os.getenv("GEMINI_API_KEY"): # Use env var to check for availability
         return get_fallback_concepts(user_data.get("mode", "video"), count)
 
     market = user_data["market"]
@@ -226,7 +218,8 @@ Return the output as a single JSON object (array of objects) only.
     )
     
     try:
-        response = genai.GenerativeModel('gemini-2.5-flash').generate_content( # 💡 שימוש ישיר ב-genai
+        # FIX: Using GenerativeModel directly (resolves AttributeError)
+        response = genai.GenerativeModel('gemini-2.5-flash').generate_content(
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -500,13 +493,12 @@ async def ask_video_length_or_generate(update: Update, context: ContextTypes.DEF
         if mode == "concept_random":
             context.user_data["concept_mode"] = "random"
             
-            # 💥 Calls Gemini to generate 4 concepts
+            # Calls Gemini to generate 4 concepts
             concepts = generate_concepts_via_gemini(context.user_data, count=4)
             context.user_data["ideas"] = concepts
 
             text_lines = ["I generated 4 fresh ideas via Gemini. Choose one of the buttons below.\n"]
             for idx, idea in concepts.items():
-                # Note: The actual display of ideas happens here, not in the build_prompts functions
                 text_lines.append(f"{idx}. **{idea['title']}**: {idea['concept']}")
             text = "\n".join(text_lines)
             
@@ -637,24 +629,32 @@ def main():
 
     application = ApplicationBuilder().token(token).build()
 
-conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        # 💡 התיקון: אנחנו צריכים להכניס את CHOOSING_TYPE לבלוק ה-States הראשי
+    conv_handler = ConversationHandler(
+        # FIX for SyntaxError (removed U+00A0 characters from indentation)
+        entry_points=[CommandHandler("start", start)],
         states={
-            CHOOSING_TYPE: [CallbackQueryHandler(choose_type)], # <--- ה-State הראשון חייב להיות מוגדר כאן
-            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)], 
-            # ... כל שאר ה-States ...
-            # ...
+            # FIX for PTBUserWarning (States now start from 100)
+            CHOOSING_TYPE: [CallbackQueryHandler(choose_type)],
+            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)],
+            ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
+            ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
+            ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
+            ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
+            
+            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)],
+            INPUT_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
+            CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
+            
+            ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,
-    )
+        allow_reentry=True,
+    )
 
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
-    
-    # 🚨 התיקון: הסרנו את close_bot_session=True
+    # FIX: Removed close_bot_session=True (Type Error)
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
@@ -665,12 +665,3 @@ conv_handler = ConversationHandler(
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
