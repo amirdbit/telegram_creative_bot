@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv("TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Gemini Configuration
+# Gemini Configuration 
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -54,7 +54,7 @@ else:
 
 
 # -------------------------------------------------
-#  States for ConversationHandler (FIXED: Starting from 100)
+#  States for ConversationHandler (FIXED: Starting from 100 to avoid 0/1 conflicts)
 # -------------------------------------------------
 (
     CHOOSING_TYPE,
@@ -74,18 +74,6 @@ else:
 # -------------------------------------------------
 #  Helpers & Idea Generation (All functions needed for the bot)
 # -------------------------------------------------
-
-# FIX for NameError: get_random_video_ideas
-def get_random_video_ideas(market):
-    """
-    Dummy function to resolve NameError: get_random_video_ideas is not defined.
-    Uses market information, returns placeholder data.
-    """
-    if market == "ישראל":
-        return ["רעיון מוצר מקורי", "רעיון ויראלי", "רעיון לפרסומת קצרה"]
-    else:
-        return ["Global viral idea", "Short ad concept", "Product review idea"]
-
 
 def infer_native_language(market: str) -> tuple[str, str] | None:
     """Detect base language from market name."""
@@ -172,7 +160,7 @@ def get_fallback_concepts(mode: str, count: int) -> Dict[int, Dict[str, str]]:
     return {
         i + 1: {
             "title": titles[i % len(titles)], 
-            "concept": f"Fallback concept {i+1}: Cannot reach Gemini API. Using generic concept.",
+            "concept": f"Fallback concept {i+1}: Cannot reach Gemini API. Using generic concept. Focus on {titles[i % len(titles)]}.",
         } 
         for i in range(count)
     }
@@ -182,7 +170,7 @@ def generate_concepts_via_gemini(user_data: Dict[str, Any], count: int = 4) -> D
     """
     Generates creative concepts using the Gemini API.
     """
-    if not os.getenv("GEMINI_API_KEY"): # Use env var to check for availability
+    if not os.getenv("GEMINI_API_KEY"):
         return get_fallback_concepts(user_data.get("mode", "video"), count)
 
     market = user_data["market"]
@@ -218,7 +206,6 @@ Return the output as a single JSON object (array of objects) only.
     )
     
     try:
-        # FIX: Using GenerativeModel directly (resolves AttributeError)
         response = genai.GenerativeModel('gemini-2.5-flash').generate_content(
             contents=prompt,
             config=types.GenerateContentConfig(
@@ -244,28 +231,28 @@ def build_whisk_frame_prompt(user_data: Dict[str, Any], variation_index: int) ->
     language = user_data["language"]
     style = user_data["style"]
     scene = user_data.get("scene_concept", f"a fan in {market} looking at a phone in a natural setting.")
+    actor = user_data.get("actor_desc", "a young, excited football fan.")
+
 
     return f"""
 Frame 1 Whisk image prompt for VEO video - Variation {variation_index}
 Output: Static image (Vertical 9:16)
 
-Goal:
-- Generate the first frame of the VEO video. The image must match the opening shot of the video exactly.
-- NO real teams, NO real players, NO copyrighted logos.
+GOAL: Generate the first frame of the VEO video. The image must match the opening shot of the video exactly.
+CONCEPT: {scene} (Must be the core visual element)
 
-Scene:
-- A realistic portrait shot of the main actor described in the video prompt, in a setting that matches the video's opening scene: {scene}
+VISUAL INSTRUCTIONS:
+- A realistic portrait shot of the main actor ({actor}) in a setting that matches the video's opening scene: {scene}
 - Same actor look, outfit and environment as the VEO video in a natural setting.
 - The actor holds a phone but the screen is NEVER visible to the camera.
 - Lighting must be clean and realistic (UGC style).
 
-Brand and language:
+BRANDING AND TEXT:
 - All on image text must be written in {language}.
-- Include the {brand} logo and a clear CTA (e.g., Download now or Play now).
+- Include the {brand} logo and a clear CTA (e.g., Download now or Play now) in the image design.
 
-Instructions for Whisk:
-- Describe the visual details of this single frame only. Do NOT mention the word "prompt" or technical terms.
-- Focus on lighting, mood, body language and clear placement of logo and CTA.
+RESTRICTIONS:
+- NO real teams, NO real players, NO copyrighted logos.
 """.strip()
 
 
@@ -286,19 +273,17 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
     for v in range(1, variations + 1):
         full_output_lines.append("="*50)
         full_output_lines.append(f"VEO VIDEO PROMPT - VARIATION {v} (Total Length: {length} seconds)")
-        full_output_lines.append(f"Brand: {brand} | Market: {market} | Style: {style} | Language: {language}")
+        full_output_lines.append(f"Creative Concept: {scene}") 
+        full_output_lines.append(f"Style: {style} | Market: {market} | Actor: {actor} | Language: {language}")
         full_output_lines.append("="*50)
         full_output_lines.append("")
         
-        full_output_lines.append(f"Creative Concept: {scene}")
-
-        full_output_lines.append("")
-        full_output_lines.append("--- VEO GENERATION INSTRUCTIONS ---")
-        full_output_lines.append("General Rules:")
-        full_output_lines.append(f"- Output must be {len(segments)} separate VEO prompts. Each prompt is for a clip of up to 8 seconds.")
-        full_output_lines.append("- All visuals must maintain actor, outfit, lighting, and scene consistency across all segments.")
-        full_output_lines.append("- The actor holds a phone but the screen is NEVER shown directly to the camera.")
-        full_output_lines.append(f"- The final spoken dialog must be written entirely in {language}.")
+        # --- תבנית המוכנה להעתקה מתחילה כאן ---
+        full_output_lines.append("--- VEO VIDEO GENERATION PROMPT (READY-TO-COPY) ---")
+        
+        full_output_lines.append(f"GOAL: Create a vertical 9:16 UGC video for UA, focusing on the concept: '{scene}'.")
+        full_output_lines.append(f"VISUAL STYLE: {style}. Use {actor} in a typical {market} setting.")
+        full_output_lines.append("CONTENT RESTRICTIONS: NO real teams, NO real players, NO copyrighted logos.")
         full_output_lines.append("")
 
         # Segment Prompts (VEO)
@@ -307,24 +292,25 @@ def build_veo_prompts(user_data: Dict[str, Any]) -> str:
             end_s = start_s + seg_len - 1
 
             focus = random.choice([
-                "strong emotional reaction to a football moment", 
-                "clear call to action that invites the viewer to download or play",
-                "natural fan behavior and small realistic details in the background",
+                "strong emotional reaction to a football moment and quickly checks the score on the phone", 
+                "a clear call to action inviting the viewer to download or play with the brand name {brand} visible on screen",
+                "natural fan behavior, using a quick, dynamic camera movement in the background",
             ])
             example_dialog = build_example_dialog(language, market, brand)
 
-            full_output_lines.append(f"--- VEO SEGMENT {s_idx + 1} of {len(segments)}: Seconds {start_s} to {end_s} ---")
-            full_output_lines.append(f"1. VISUAL: Vertical 9:16. Describe exact framing, movement, and scene actions for seconds {start_s} to {end_s}. Focus on: {focus}.")
-            full_output_lines.append(f"2. DIALOG: Write the full spoken script for this {seg_len} second segment, line by line, in {language}. The script must fit comfortably in {seg_len} seconds.")
-            full_output_lines.append(f"   Dialogue Tone Example (must be written in {language} in final prompt):")
+            full_output_lines.append(f"--- CLIP {s_idx + 1} of {len(segments)} ({seg_len} SECONDS) ---")
+            full_output_lines.append(f"1. VISUAL: Vertical 9:16. The {actor} in the {market} setting. Action should focus on: {focus}.")
+            full_output_lines.append(f"2. DIALOG ({language}): Write the full spoken script for this clip. Must fit in {seg_len} seconds.")
+            full_output_lines.append(f"   Example script lines for tone:")
             for d in example_dialog:
                 full_output_lines.append(f"   {d}")
             full_output_lines.append("")
 
         # Whisk Frame 1 Prompt
-        full_output_lines.append("--- WHISK FRAME 1 PROMPT (Ready-to-Paste for Image Input) ---")
+        full_output_lines.append("--- WHISK FRAME 1 PROMPT (READY-TO-PASTE FOR IMAGE INPUT) ---")
         full_output_lines.append(build_whisk_frame_prompt(user_data, v))
-        full_output_lines.append("")
+        full_output_lines.append("--- END OF VARIATION ---")
+        full_output_lines.append("\n\n")
 
     return "\n".join(full_output_lines)
 
@@ -344,28 +330,28 @@ def build_whisk_prompts(user_data: Dict[str, Any]) -> str:
     for v in range(1, variations + 1):
         full_output_lines.append("="*50)
         full_output_lines.append(f"WHISK IMAGE PROMPT - VARIATION {v}")
-        full_output_lines.append(f"Brand: {brand} | Market: {market} | Style: {style} | Language: {language}")
+        full_output_lines.append(f"Creative Concept: {scene}") 
+        full_output_lines.append(f"Style: {style} | Market: {market} | Language: {language}")
         full_output_lines.append("="*50)
         full_output_lines.append("")
 
-        full_output_lines.append(f"Creative Concept: {scene}")
-
-        full_output_lines.append("")
-        full_output_lines.append("--- WHISK GENERATION INSTRUCTIONS ---")
+        # --- תבנית המוכנה להעתקה מתחילה כאן ---
+        full_output_lines.append("--- WHISK IMAGE GENERATION PROMPT (READY-TO-COPY) ---")
         
         layout_focus = random.choice([
-            "big central logo and CTA button",
-            "strong promo numbers with a smaller logo",
-            "phone held in a hand with clear brand elements around it",
-            "clean background in brand colors with simple icons",
+            "big central logo and CTA button placed in the middle, dark cinematic lighting",
+            "strong promo numbers with a smaller logo, minimalist graphic banner style",
+            "phone held in a hand showing the app interface (DO NOT SHOW SCREEN), clean brand elements around it",
+            "clean background in brand colors with simple icons and bold text overlay",
         ])
-
-        full_output_lines.append(f"1. VISUAL: Vertical 9:16 format for mobile placement. Focus on: {layout_focus}.")
-        full_output_lines.append("2. SCENE: Describe the image contents, actor (if any), and setting. Must feel native to the market.")
-        full_output_lines.append("3. BRANDING: Use official brand colors and logo. Never use real teams or copyrighted player images.")
-        full_output_lines.append(f"4. TEXT: All visible text must be in {language}. Include a short, bold headline, one supporting line, and a clear CTA (e.g., Download now).")
-        full_output_lines.append("--- END PROMPT ---")
-        full_output_lines.append("")
+        
+        full_output_lines.append(f"GOAL: Create a vertical 9:16 mobile ad focused on the concept: '{scene}'.")
+        full_output_lines.append(f"VISUAL INSTRUCTIONS: {style} style, focused on {layout_focus}. Scene should include elements relevant to {market}. Use a fan (defined as: {actor}).")
+        full_output_lines.append(f"BRANDING: Include the {brand} logo prominently. Use official brand colors (e.g., black and orange).")
+        full_output_lines.append(f"TEXT INSTRUCTIONS: All text must be in {language}. Include a short, bold headline, one supporting line, and a clear CTA (e.g., Download now).")
+        full_output_lines.append("CONTENT RESTRICTIONS: NO real teams, NO real players, NO copyrighted logos.")
+        full_output_lines.append("--- END OF VARIATION ---")
+        full_output_lines.append("\n\n")
 
     return "\n".join(full_output_lines)
 
@@ -436,6 +422,7 @@ async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         ["English"],
     ]
     if native_lang_info and native_lang_info[0] != "EN":
+        # Uses the native language name from the helper function
         keyboard.insert(0, [f"Native Language ({native_lang_info[1]})"])
     
     if not native_lang_info:
@@ -453,7 +440,12 @@ async def ask_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def ask_style(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["language"] = update.message.text.strip()
+    # Handle language input: if user chose "Native Language (X)", extract only X
+    text_input = update.message.text.strip()
+    if text_input.startswith("Native Language ("):
+        context.user_data["language"] = text_input.split("(")[1].split(")")[0].strip()
+    else:
+        context.user_data["language"] = text_input
     
     await update.message.reply_text("OK. Please describe the creative style (UGC selfie, motion graphic, clean banner, etc.)", 
                                     reply_markup=ReplyKeyboardRemove())
@@ -549,13 +541,12 @@ async def choose_idea_from_list(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["scene_concept"] = context.user_data["ideas"][chosen]["concept"] 
     
     if context.user_data["mode"] == "video":
-        await query.edit_message_text(
-            "Nice, we will work with that idea. What is the total video length in seconds? (8, 16, 24, or 32)",
-        )
         keyboard = [["8", "16"], ["24", "32"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-        await query.message.reply_text("Choose length:", reply_markup=reply_markup)
-        
+        await query.edit_message_text(
+            "Nice, we will work with that idea. What is the total video length in seconds? (8, 16, 24, or 32)",
+            reply_markup=reply_markup,
+        )
         return ASK_VIDEO_LENGTH
     else:
         await query.edit_message_text("Nice, we will work with that idea. Generating 4 Whisk image prompts...")
@@ -588,6 +579,10 @@ async def generate_prompts(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         effective_message = update.callback_query.message
     else:
         effective_message = update.message
+
+    # Ensure scene_concept is set before calling build functions
+    if "scene_concept" not in user_data:
+        user_data["scene_concept"] = "General marketing concept." 
 
     if mode == "video":
         result_text = build_veo_prompts(user_data)
@@ -625,15 +620,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def main():
     token = os.getenv("TOKEN")
     if not token:
+        # In a production environment like Render, TOKEN should be set
         raise RuntimeError("TOKEN environment variable is not set") 
 
     application = ApplicationBuilder().token(token).build()
 
     conv_handler = ConversationHandler(
-        # FIX for SyntaxError (removed U+00A0 characters from indentation)
         entry_points=[CommandHandler("start", start)],
         states={
-            # FIX for PTBUserWarning (States now start from 100)
             CHOOSING_TYPE: [CallbackQueryHandler(choose_type)],
             ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)],
             ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
@@ -655,6 +649,7 @@ def main():
     
     logger.info("Bot is starting with quiet polling...")
     # FIX: Removed close_bot_session=True (Type Error)
+    # FIX for Conflict Error (drop_pending_updates=True)
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
