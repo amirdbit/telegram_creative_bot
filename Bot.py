@@ -630,6 +630,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # Main Function
 # -------------------------------------------------
 
+# -------------------------------------------------
+# Main Function
+# -------------------------------------------------
+
 def main():
     token = os.getenv("TOKEN")
     if not token:
@@ -639,17 +643,16 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
-states={
-            #... (כל ה-States הקודמים) ...
+        states={
+            CHOOSING_TYPE: [CallbackQueryHandler(choose_type)],
+            ASK_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_market)], 
+            ASK_MARKET: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_language)],
+            ASK_LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_style)],
+            ASK_STYLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_actor)],
             ASK_ACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_scene_concept)],
             
-            # ASK_SCENE_CONCEPT מוביל לבחירת קונספט
-            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)], 
-            
-            # INPUT_CONCEPT הוא שלב הקלט הטקסטואלי החופשי
+            ASK_SCENE_CONCEPT: [CallbackQueryHandler(ask_video_length_or_generate)],
             INPUT_CONCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_or_generate)],
-            
-            # 💡 זה ה-State שקורס
             CHOOSE_IDEA_FROM_LIST: [CallbackQueryHandler(choose_idea_from_list)],
             
             ASK_VIDEO_LENGTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_video_length_handler)],
@@ -661,11 +664,14 @@ states={
     application.add_handler(conv_handler)
     
     logger.info("Bot is starting with quiet polling...")
+    
+    # 🚨 התיקון ל-Conflict (עוזר לכיבוי נקי)
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         poll_interval=2.0, 
         timeout=20,
         drop_pending_updates=True, 
+        close_bot_session=True # 💡 ודא שהוספת את זה!
     )
 
 
