@@ -74,7 +74,7 @@ else:
     GENERATE_PROMPTS,
     INPUT_CONCEPT, 
     CHOOSE_IDEA_FROM_LIST,
-) = range(1, 12) # 💡 שימו לב: מתחיל מ-1 ומסתיים ב-12.
+) = range(100, 111) # 💡 מתחילים מ-100 כדי למנוע קונפליקטים עם 0 ו-1
 
 
 # -------------------------------------------------
@@ -661,6 +661,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
